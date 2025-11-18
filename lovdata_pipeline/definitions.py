@@ -28,6 +28,7 @@ from lovdata_pipeline.assets import (
     parsed_legal_chunks,
     vector_database,
 )
+from lovdata_pipeline.io_managers import ChunksIOManager
 from lovdata_pipeline.resources import ChromaDBResource, LovligResource
 
 # ============================================================================
@@ -85,6 +86,7 @@ resources_by_env = {
             collection_name="lovdata_legal_docs",
             distance_metric="cosine",
         ),
+        "chunks_io_manager": ChunksIOManager(base_dir="./data/io_manager"),
     },
     "production": {
         "lovlig": LovligResource(
@@ -100,6 +102,7 @@ resources_by_env = {
             collection_name=EnvVar("CHROMADB_COLLECTION_NAME"),
             distance_metric=EnvVar("CHROMADB_DISTANCE_METRIC"),
         ),
+        "chunks_io_manager": ChunksIOManager(base_dir=EnvVar("IO_MANAGER_BASE_DIR")),
     },
 }
 

@@ -12,24 +12,24 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
-from dagster import asset
+from dagster import AssetIn, asset
 from dagster_openai import OpenAIResource
 from langfuse import get_client, observe
 
 from lovdata_pipeline.configs import EmbeddingConfig
 from lovdata_pipeline.resources import ChromaDBResource
-from lovdata_pipeline.services import CheckpointService, EmbeddingService, FileService
+from lovdata_pipeline.services import CheckpointService, EmbeddingService
 from lovdata_pipeline.utils import estimate_tokens
 
 
-@asset(group_name="transformation", compute_kind="openai")
+@asset(group_name="transformation", compute_kind="openai", ins={"parsed_legal_chunks": AssetIn(key="parsed_legal_chunks", input_manager_key="chunks_io_manager")})
 @observe(name="generate-embeddings-batch")
 def document_embeddings(
     context,
     config: EmbeddingConfig,
     openai: OpenAIResource,
     chromadb: ChromaDBResource,
-    parsed_legal_chunks: dict,
+    parsed_legal_chunks: list,
     cleanup_changed_documents: dict,  # FIX: Ensure cleanup happens before embedding
 ) -> dict:
     """Generate embeddings for legal chunks using OpenAI API with streaming.
@@ -51,26 +51,20 @@ def document_embeddings(
         config: Embedding configuration (batch sizes, rate limits, checkpointing)
         openai: OpenAI resource for API access
         chromadb: ChromaDB resource for immediate writes
-        parsed_legal_chunks: Dict with chunks_file path and total_chunks
+        parsed_legal_chunks: List of LegalChunk objects from IO Manager
         cleanup_changed_documents: Ensures old chunks are deleted before new embeddings
 
     Returns:
         Dict with statistics about processed embeddings
     """
-    # Load chunks from file using FileService
-    chunks_file = Path(parsed_legal_chunks["chunks_file"])
-    total_chunks = parsed_legal_chunks["total_chunks"]
+    # Chunks loaded directly by IO Manager
+    all_chunks = parsed_legal_chunks
 
-    if not chunks_file.exists() or total_chunks == 0:
+    if not all_chunks:
         context.log.info("No chunks to embed")
         return {"total_embeddings": 0, "batches_processed": 0}
 
-    context.log.info(f"Processing {total_chunks} chunks from {chunks_file} (streaming)...")
-
-    # Load all chunks using FileService (memory-efficient streaming)
-    all_chunks = FileService.load_all_chunks(chunks_file)
-
-    context.log.info(f"Loaded {len(all_chunks)} chunks, will process in streaming batches")
+    context.log.info(f"Processing {len(all_chunks)} chunks (loaded via IO Manager)...")
 
     # Get configuration from Config class
     max_batch_size = min(config.batch_size, 2048)  # Enforce OpenAI limit
@@ -283,11 +277,6 @@ def document_embeddings(
             context.log.info("Checkpoint cleaned up after successful completion")
         else:
             context.log.warning("Failed to clean up checkpoint")
-
-    # Clean up temporary chunks file using FileService
-    deleted = FileService.cleanup_temp_files(chunks_file)
-    if deleted:
-        context.log.info(f"Cleaned up temp files: {deleted}")
 
     # Verify final count
     final_collection_count = collection.count()

@@ -8,14 +8,13 @@ This module contains Dagster assets for:
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import Iterator
 
 from dagster import asset
 
 from lovdata_pipeline.configs import IngestionConfig, ParsingConfig
-from lovdata_pipeline.parsers import LovdataXMLParser
+from lovdata_pipeline.parsers import LegalChunk, LovdataXMLParser
 from lovdata_pipeline.resources import LovligResource
-from lovdata_pipeline.services import FileService
 
 
 @asset(group_name="ingestion", compute_kind="lovlig")
@@ -63,8 +62,8 @@ def changed_legal_documents(
     """Get metadata about files that need processing (added or modified).
 
     This asset queries the lovlig state to identify files that have been
-    added or modified since the last sync. Returns metadata only to avoid
-    memory issues - actual file processing happens in batches downstream.
+    added or modified since the last sync. Returns metadata directly -
+    Dagster handles serialization via IO Manager.
 
     Args:
         context: Dagster execution context
@@ -108,42 +107,26 @@ def changed_legal_documents(
         }
     )
 
-    # Return metadata - store file list in a temp file using FileService
-    metadata_file = Path("data/temp_file_list.json")
-    metadata_data = {
+    # Return metadata directly - IO Manager handles storage
+    return {
         "file_metadata": all_file_meta,
         "batch_size": batch_size,
         "total_files": files_to_process,
     }
 
-    success = FileService.write_json(metadata_file, metadata_data)
-    if not success:
-        context.log.error("Failed to write metadata file")
-        raise RuntimeError("Failed to write metadata file")
 
-    context.log.info(f"Wrote file metadata to {metadata_file}")
-
-    result = {
-        "metadata_file": str(metadata_file),
-        "total_files": files_to_process,
-        "batch_size": batch_size,
-    }
-    context.log.info(f"Returning: {result}")
-    return result
-
-
-@asset(group_name="ingestion", compute_kind="xml_parsing")
+@asset(group_name="ingestion", compute_kind="xml_parsing", io_manager_key="chunks_io_manager")
 def parsed_legal_chunks(
     context,
     config: ParsingConfig,
     changed_legal_documents: dict,
     lovlig: LovligResource,
-) -> dict:
+) -> Iterator[list[LegalChunk]]:
     """Parse XML files from lovlig and extract chunks with token-aware splitting.
 
     This asset processes files in streaming batches to avoid memory issues.
-    Files are read from the metadata file created by changed_legal_documents,
-    processed in batches, and chunks written to a temp file to avoid pickling issues.
+    Yields batches of chunks that are handled by the ChunksIOManager for
+    memory-efficient storage.
 
     Token-aware splitting strategy:
     1. Parse at legalArticle level
@@ -155,27 +138,20 @@ def parsed_legal_chunks(
     Args:
         context: Dagster execution context
         config: Parsing configuration (max_tokens, overlap_tokens)
-        changed_legal_documents: Metadata dict with file list location
+        changed_legal_documents: Metadata dict from upstream asset
         lovlig: LovligResource for resolving file paths
 
-    Returns:
-        Dict with chunks_file path and total_chunks count
+    Yields:
+        Batches of LegalChunk objects
     """
-    # Load file metadata from temp file using FileService
-    metadata_file = Path(changed_legal_documents["metadata_file"])
-    metadata = FileService.read_json(metadata_file)
-
-    if not metadata:
-        context.log.error(f"Metadata file not found or invalid: {metadata_file}")
-        return {"chunks_file": "", "total_chunks": 0}
-
-    file_metadata_list = metadata["file_metadata"]
-    batch_size = metadata["batch_size"]
-    total_files = metadata["total_files"]
+    # Get metadata directly from upstream asset (no file I/O)
+    file_metadata_list = changed_legal_documents["file_metadata"]
+    batch_size = changed_legal_documents["batch_size"]
+    total_files = changed_legal_documents["total_files"]
 
     if not file_metadata_list:
         context.log.info("No documents to parse")
-        return {"chunks_file": "", "total_chunks": 0}
+        return
 
     # Get token-aware parsing configuration
     max_tokens = config.max_tokens
@@ -184,9 +160,6 @@ def parsed_legal_chunks(
     parser = LovdataXMLParser(
         chunk_level="legalArticle", max_tokens=max_tokens, overlap_tokens=overlap_tokens
     )
-
-    # Prepare chunks file path
-    chunks_file = Path("data/temp_chunks.pickle")
 
     total_chunks = 0
     split_count = 0
@@ -197,74 +170,59 @@ def parsed_legal_chunks(
         f"(max_tokens={max_tokens}, overlap={overlap_tokens})"
     )
 
-    # Create generator for streaming writes (memory efficient)
-    def generate_chunk_batches():
-        """Generator that yields chunk batches for streaming writes."""
-        nonlocal total_chunks, split_count, files_processed
+    # Process files in batches and yield chunks (IO Manager handles storage)
+    for batch_start in range(0, len(file_metadata_list), batch_size):
+        batch_end = min(batch_start + batch_size, len(file_metadata_list))
+        batch = file_metadata_list[batch_start:batch_end]
 
-        # Process files in batches
-        for batch_start in range(0, len(file_metadata_list), batch_size):
-            batch_end = min(batch_start + batch_size, len(file_metadata_list))
-            batch = file_metadata_list[batch_start:batch_end]
+        context.log.info(
+            f"Processing batch {batch_start // batch_size + 1}: "
+            f"files {batch_start + 1}-{batch_end} of {total_files}"
+        )
 
-            context.log.info(
-                f"Processing batch {batch_start // batch_size + 1}: "
-                f"files {batch_start + 1}-{batch_end} of {total_files}"
-            )
-
-            batch_chunks = []
-            for file_meta in batch:
-                try:
-                    file_path = lovlig.get_file_path(file_meta)
-                    if not file_path.exists():
-                        context.log.warning(f"File not found: {file_path}")
-                        continue
-
-                    chunks = parser.parse_document(file_path)
-                    batch_chunks.extend(chunks)
-                    files_processed += 1
-
-                    # Track splits
-                    split_count += sum(1 for c in chunks if c.is_split)
-
-                except Exception as e:
-                    context.log.error(f"Failed to parse {file_meta}: {e}")
+        batch_chunks = []
+        for file_meta in batch:
+            try:
+                file_path = lovlig.get_file_path(file_meta)
+                if not file_path.exists():
+                    context.log.warning(f"File not found: {file_path}")
                     continue
 
-            if batch_chunks:
-                total_chunks += len(batch_chunks)
+                chunks = parser.parse_document(file_path)
+                batch_chunks.extend(chunks)
+                files_processed += 1
 
-                # Log progress after each batch
-                context.log.info(
-                    f"Batch complete: {files_processed}/{total_files} files processed, "
-                    f"{total_chunks} total chunks written"
-                )
+                # Track splits
+                split_count += sum(1 for c in chunks if c.is_split)
 
-                yield batch_chunks
+            except Exception as e:
+                context.log.error(f"Failed to parse {file_meta}: {e}")
+                continue
 
-    # Write chunks using FileService (streaming, memory-efficient)
-    total_chunks_written, batches_written = FileService.write_chunks_streaming(
-        chunks_file, generate_chunk_batches()
-    )
+        if batch_chunks:
+            total_chunks += len(batch_chunks)
 
-    # Clean up temp metadata file using FileService
-    FileService.cleanup_temp_files(metadata_file)
+            # Log progress after each batch
+            context.log.info(
+                f"Batch complete: {files_processed}/{total_files} files processed, "
+                f"{total_chunks} total chunks generated"
+            )
+
+            # Yield batch for IO Manager to handle
+            yield batch_chunks
 
     context.log.info(
-        f"Parsed {total_chunks_written} chunks from {files_processed} files "
-        f"({split_count} chunks were split) in {batches_written} batches"
+        f"Parsed {total_chunks} chunks from {files_processed} files "
+        f"({split_count} chunks were split)"
     )
 
     context.add_output_metadata(
         {
-            "total_chunks": total_chunks_written,
+            "total_chunks": total_chunks,
             "files_processed": files_processed,
             "chunks_split": split_count,
-            "batches_written": batches_written,
             "avg_chunks_per_file": (
-                round(total_chunks_written / files_processed, 2) if files_processed > 0 else 0
+                round(total_chunks / files_processed, 2) if files_processed > 0 else 0
             ),
         }
     )
-
-    return {"chunks_file": str(chunks_file), "total_chunks": total_chunks_written}
