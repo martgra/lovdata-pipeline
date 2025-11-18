@@ -12,6 +12,15 @@ help:
 	@echo "  lint         - Check code with ruff"
 	@echo "  format       - Format code with ruff"
 	@echo "  run          - Run the main application"
+	@echo "  dagster      - Start Dagster dev server"
+	@echo "  dagster-job  - Run Dagster processing job (uses .env or defaults)"
+	@echo "  dagster-test - Run pipeline with 10 files (for testing)"
+	@echo "  dagster-batch - Run pipeline with 100 files"
+	@echo "  dagster-sync - Sync Lovdata datasets only (uses LOVDATA_DATASET_FILTER from .env)"
+	@echo "  dagster-sync-all - Sync all Lovdata datasets (overrides filter)"
+	@echo "  docker-build - Build Docker image"
+	@echo "  docker-up    - Start Docker Compose"
+	@echo "  docker-down  - Stop Docker Compose"
 	@echo "  clean        - Remove cache and temporary files"
 	@echo "  secrets      - Scan for secrets using detect-secrets"
 	@echo "  check-tools  - Check if required tools are installed"
@@ -39,6 +48,40 @@ format:
 
 run:
 	uv run python lovdata_pipeline/__main__.py
+
+dagster:
+	uv run dagster dev -m lovdata_pipeline
+
+dagster-job:
+	uv run dagster job execute -m lovdata_pipeline -j lovdata_processing_job
+
+# Run with limited files for testing
+dagster-test:
+	MAX_FILES=10 PARSER_MAX_TOKENS=6800 uv run dagster asset materialize -m lovdata_pipeline --select "lovdata_sync,changed_legal_documents,parsed_legal_chunks"
+
+# Run with medium batch
+dagster-batch:
+	MAX_FILES=100 PARSER_MAX_TOKENS=6800 uv run dagster job execute -m lovdata_pipeline -j lovdata_processing_job
+
+# Sync datasets only (uses LOVDATA_DATASET_FILTER from .env)
+dagster-sync:
+	uv run dagster asset materialize -m lovdata_pipeline --select "lovdata_sync"
+
+# Sync all datasets (override filter)
+dagster-sync-all:
+	LOVDATA_DATASET_FILTER="" uv run dagster asset materialize -m lovdata_pipeline --select "lovdata_sync"
+
+docker-build:
+	docker-compose build
+
+docker-up:
+	docker-compose up -d
+
+docker-down:
+	docker-compose down
+
+docker-logs:
+	docker-compose logs -f
 
 secrets: .secrets.baseline
 	uv run detect-secrets scan --baseline .secrets.baseline

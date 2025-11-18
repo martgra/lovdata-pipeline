@@ -1,11 +1,22 @@
 [project]
 name = "lovdata-pipeline"
 version = "0.1.0"
-description = ""
+description = "Dagster pipeline for ingesting Norwegian legal documents from Lovdata into ChromaDB with embeddings"
 authors = [{ name = "Martin Gran", email = "martgra@gmail.com" }]
 requires-python = ">=3.11"
 readme = "README.md"
-dependencies = []
+dependencies = [
+    "dagster>=1.9.0",
+    "dagster-webserver>=1.9.0",
+    "dagster-openai>=0.25.0",
+    "chromadb>=0.5.0",
+    "langfuse>=2.50.0",
+    "lxml>=5.3.0",
+    "openai>=1.54.0",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+    "lovdata-processing",
+]
 
 [dependency-groups]
 dev = [
@@ -26,6 +37,9 @@ default-groups = [
     "dev",
     "test",
 ]
+
+[tool.uv.sources]
+lovdata-processing = { git = "https://github.com/martgra/lovlig.git" }
 
 [tool.hatch.build.targets.sdist]
 include = ["lovdata_pipeline"]

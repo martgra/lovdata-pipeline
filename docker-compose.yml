@@ -1,0 +1,44 @@
+version: "3.8"
+
+services:
+  dagster:
+    build: .
+    container_name: lovdata-pipeline
+    ports:
+      - "3000:3000"
+    environment:
+      - DAGSTER_DEPLOYMENT=local
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY}
+      - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY}
+      - LANGFUSE_HOST=${LANGFUSE_HOST:-https://cloud.langfuse.com}
+    volumes:
+      # Mount data directories for persistence
+      - ./data:/app/data
+      - ./dagster_home:/app/dagster_home
+      # Mount source code for development (optional)
+      - ./lovdata_pipeline:/app/lovdata_pipeline
+    restart: unless-stopped
+    networks:
+      - lovdata-network
+
+  # Optional: PostgreSQL for production Dagster storage
+  # Uncomment for production deployments
+  # postgres:
+  #   image: postgres:15
+  #   container_name: lovdata-postgres
+  #   environment:
+  #     - POSTGRES_USER=dagster
+  #     - POSTGRES_PASSWORD=dagster
+  #     - POSTGRES_DB=dagster
+  #   volumes:
+  #     - postgres_data:/var/lib/postgresql/data
+  #   networks:
+  #     - lovdata-network
+
+networks:
+  lovdata-network:
+    driver: bridge
+# Uncomment for PostgreSQL
+# volumes:
+#   postgres_data:

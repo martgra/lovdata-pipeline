@@ -163,3 +163,5 @@ cython_debug/
 temp_out/
 test_output/
 build_output/
+data/
+.tmp_dagster_home_*
