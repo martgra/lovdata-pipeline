@@ -16,6 +16,7 @@ from dagster import asset
 from dagster_openai import OpenAIResource
 from langfuse import get_client, observe
 
+from lovdata_pipeline.configs import EmbeddingConfig
 from lovdata_pipeline.resources import ChromaDBResource
 from lovdata_pipeline.services import CheckpointService, EmbeddingService, FileService
 from lovdata_pipeline.utils import estimate_tokens
@@ -25,9 +26,11 @@ from lovdata_pipeline.utils import estimate_tokens
 @observe(name="generate-embeddings-batch")
 def document_embeddings(
     context,
+    config: EmbeddingConfig,
     openai: OpenAIResource,
     chromadb: ChromaDBResource,
     parsed_legal_chunks: dict,
+    cleanup_changed_documents: dict,  # FIX: Ensure cleanup happens before embedding
 ) -> dict:
     """Generate embeddings for legal chunks using OpenAI API with streaming.
 
@@ -43,21 +46,17 @@ def document_embeddings(
     - Max tokens per request: 300,000 (embeddings endpoint)
     - text-embedding-3-large: ~8k token limit per input
 
-    Environment Variables:
-    - EMBEDDING_BATCH_SIZE: Number of texts per API request (default: 2048, max: 2048)
-    - EMBEDDING_RATE_LIMIT_DELAY: Seconds between batches (default: 0.5)
-
     Args:
         context: Dagster execution context
+        config: Embedding configuration (batch sizes, rate limits, checkpointing)
         openai: OpenAI resource for API access
-        parsed_legal_chunks: Dict with chunks_file path and total_chunks
         chromadb: ChromaDB resource for immediate writes
+        parsed_legal_chunks: Dict with chunks_file path and total_chunks
+        cleanup_changed_documents: Ensures old chunks are deleted before new embeddings
 
     Returns:
         Dict with statistics about processed embeddings
     """
-    import os
-
     # Load chunks from file using FileService
     chunks_file = Path(parsed_legal_chunks["chunks_file"])
     total_chunks = parsed_legal_chunks["total_chunks"]
@@ -73,13 +72,13 @@ def document_embeddings(
 
     context.log.info(f"Loaded {len(all_chunks)} chunks, will process in streaming batches")
 
-    # Configurable batch size with validation
-    max_batch_size = min(int(os.getenv("EMBEDDING_BATCH_SIZE", "2048")), 2048)
-    max_tokens_per_chunk = int(os.getenv("EMBEDDING_MAX_TOKENS_PER_CHUNK", "8192"))
-    max_tokens_per_batch = int(os.getenv("EMBEDDING_MAX_TOKENS_PER_BATCH", "250000"))
-    rate_limit_delay = float(os.getenv("EMBEDDING_RATE_LIMIT_DELAY", "0.5"))
-    max_retries = 3
-    enable_checkpointing = os.getenv("ENABLE_EMBEDDING_CHECKPOINT", "true").lower() == "true"
+    # Get configuration from Config class
+    max_batch_size = min(config.batch_size, 2048)  # Enforce OpenAI limit
+    max_tokens_per_chunk = config.max_tokens_per_chunk
+    max_tokens_per_batch = config.max_tokens_per_batch
+    rate_limit_delay = config.rate_limit_delay
+    max_retries = config.max_retries
+    enable_checkpointing = config.enable_checkpointing
 
     # Initialize checkpoint service for resume capability
     checkpoint_service = CheckpointService(checkpoint_dir=Path("data/checkpoints"))
@@ -88,7 +87,8 @@ def document_embeddings(
         f"Embedding configuration: max_batch_size={max_batch_size}, "
         f"max_tokens_per_chunk={max_tokens_per_chunk}, "
         f"max_tokens_per_batch={max_tokens_per_batch:,}, "
-        f"rate_limit_delay={rate_limit_delay}s, max_retries={max_retries}"
+        f"rate_limit_delay={rate_limit_delay}s, max_retries={max_retries}, "
+        f"checkpointing={'enabled' if enable_checkpointing else 'disabled'}"
     )
 
     langfuse = get_client()

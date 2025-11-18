@@ -12,6 +12,7 @@ from pathlib import Path
 
 from dagster import asset
 
+from lovdata_pipeline.configs import IngestionConfig, ParsingConfig
 from lovdata_pipeline.parsers import LovdataXMLParser
 from lovdata_pipeline.resources import LovligResource
 from lovdata_pipeline.services import FileService
@@ -55,6 +56,7 @@ def lovdata_sync(context, lovlig: LovligResource) -> dict[str, int]:
 @asset(group_name="ingestion", compute_kind="lovlig")
 def changed_legal_documents(
     context,
+    config: IngestionConfig,
     lovlig: LovligResource,
     lovdata_sync: dict[str, int],  # Depends on sync completing
 ) -> dict:
@@ -64,22 +66,17 @@ def changed_legal_documents(
     added or modified since the last sync. Returns metadata only to avoid
     memory issues - actual file processing happens in batches downstream.
 
-    Environment Variables:
-        MAX_FILES: Limit number of files to process (0 = all, default: 0)
-        FILE_BATCH_SIZE: Process files in batches of this size (default: 100)
-
     Args:
         context: Dagster execution context
+        config: Ingestion configuration (max_files, file_batch_size)
         lovlig: LovligResource for querying state
         lovdata_sync: Dependency on sync completion
 
     Returns:
         Dictionary with file metadata and processing configuration
     """
-    import os
-
-    max_files = int(os.getenv("MAX_FILES", "0"))  # 0 = no limit
-    batch_size = int(os.getenv("FILE_BATCH_SIZE", "100"))
+    max_files = config.max_files
+    batch_size = config.file_batch_size
 
     # Get changed files from lovlig state
     added = lovlig.get_changed_files("added")
@@ -136,7 +133,12 @@ def changed_legal_documents(
 
 
 @asset(group_name="ingestion", compute_kind="xml_parsing")
-def parsed_legal_chunks(context, changed_legal_documents: dict, lovlig: LovligResource) -> dict:
+def parsed_legal_chunks(
+    context,
+    config: ParsingConfig,
+    changed_legal_documents: dict,
+    lovlig: LovligResource,
+) -> dict:
     """Parse XML files from lovlig and extract chunks with token-aware splitting.
 
     This asset processes files in streaming batches to avoid memory issues.
@@ -150,20 +152,15 @@ def parsed_legal_chunks(context, changed_legal_documents: dict, lovlig: LovligRe
        b. Fall back to text-based splitting if needed
     3. Preserve all XML metadata across splits
 
-    Environment Variables:
-    - PARSER_MAX_TOKENS: Max tokens per chunk (default: 6800, safe for 8K limit)
-    - PARSER_OVERLAP_TOKENS: Token overlap for splits (default: 100)
-
     Args:
         context: Dagster execution context
+        config: Parsing configuration (max_tokens, overlap_tokens)
         changed_legal_documents: Metadata dict with file list location
         lovlig: LovligResource for resolving file paths
 
     Returns:
         Dict with chunks_file path and total_chunks count
     """
-    import os
-
     # Load file metadata from temp file using FileService
     metadata_file = Path(changed_legal_documents["metadata_file"])
     metadata = FileService.read_json(metadata_file)
@@ -180,9 +177,9 @@ def parsed_legal_chunks(context, changed_legal_documents: dict, lovlig: LovligRe
         context.log.info("No documents to parse")
         return {"chunks_file": "", "total_chunks": 0}
 
-    # Configure token-aware parsing
-    max_tokens = int(os.getenv("PARSER_MAX_TOKENS", "6800"))  # Safe limit for 8K
-    overlap_tokens = int(os.getenv("PARSER_OVERLAP_TOKENS", "100"))
+    # Get token-aware parsing configuration
+    max_tokens = config.max_tokens
+    overlap_tokens = config.overlap_tokens
 
     parser = LovdataXMLParser(
         chunk_level="legalArticle", max_tokens=max_tokens, overlap_tokens=overlap_tokens
