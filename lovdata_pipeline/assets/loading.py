@@ -158,31 +158,3 @@ def vector_database(
     }
 
 
-@asset(group_name="loading", compute_kind="chromadb", deps=[vector_database])
-def handle_deleted_documents(
-    context,
-    lovlig: LovligResource,
-    chromadb: ChromaDBResource,
-    lovdata_sync: dict[str, int],  # Ensure sync completed
-) -> dict:
-    """Legacy asset - kept for backwards compatibility.
-
-    Note: Cleanup is now handled by cleanup_changed_documents which runs
-    before embeddings are generated. This asset remains as a final verification
-    step but typically does nothing.
-
-    Args:
-        context: Dagster execution context
-        lovlig: LovligResource for querying removed files
-        chromadb: ChromaDB resource for database operations
-        lovdata_sync: Dependency on sync completion
-
-    Returns:
-        Dictionary with deletion statistics
-    """
-    context.log.info("Cleanup already handled by cleanup_changed_documents asset")
-    return {
-        "deleted_chunks": 0,
-        "files_removed": 0,
-        "files_modified": 0,
-    }
