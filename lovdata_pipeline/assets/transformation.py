@@ -140,8 +140,18 @@ def document_embeddings(
                 f"starting from batch {start_batch}/{total_batches}"
             )
 
-    # Get ChromaDB collection for streaming writes
-    collection = chromadb.get_or_create_collection()
+    # Get ChromaDB collection for streaming writes with explicit embedding function
+    # Asset provides the embedding function (decoupled from ChromaDB resource)
+    import os
+
+    from chromadb.utils import embedding_functions
+
+    embedding_function = embedding_functions.OpenAIEmbeddingFunction(
+        api_key=os.getenv("OPENAI_API_KEY", ""),
+        model_name="text-embedding-3-large",
+    )
+
+    collection = chromadb.get_or_create_collection(embedding_function)
 
     with openai.get_client(context) as client:
         for batch_num, batch in enumerate(batches, 1):

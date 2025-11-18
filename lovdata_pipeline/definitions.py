@@ -84,7 +84,6 @@ resources_by_env = {
             persist_directory="./data/chromadb",
             collection_name="lovdata_legal_docs",
             distance_metric="cosine",
-            embedding_model="text-embedding-3-large",
         ),
     },
     "production": {
@@ -100,7 +99,6 @@ resources_by_env = {
             persist_directory=EnvVar("CHROMADB_PERSIST_DIR"),
             collection_name=EnvVar("CHROMADB_COLLECTION_NAME"),
             distance_metric=EnvVar("CHROMADB_DISTANCE_METRIC"),
-            embedding_model=EnvVar("OPENAI_EMBEDDING_MODEL"),
         ),
     },
 }

@@ -21,17 +21,18 @@ class ChromaDBResource(ConfigurableResource):
     This resource manages connections to ChromaDB and provides methods
     for creating collections and performing vector operations.
 
+    This resource is decoupled from specific embedding providers - assets
+    are responsible for providing the appropriate embedding function.
+
     Attributes:
         persist_directory: Directory path for ChromaDB persistence
         collection_name: Name of the collection for legal documents
         distance_metric: Distance metric for similarity search
-        embedding_model: OpenAI model name for embeddings
     """
 
     persist_directory: str = "./data/chromadb"
     collection_name: str = "lovdata_legal"
     distance_metric: str = "cosine"
-    embedding_model: str = "text-embedding-3-large"
 
     def get_client(self) -> chromadb.PersistentClient:
         """Get ChromaDB persistent client.
@@ -43,27 +44,53 @@ class ChromaDBResource(ConfigurableResource):
 
         return chromadb.PersistentClient(path=self.persist_directory)
 
-    def get_or_create_collection(self, embedding_function: Any | None = None) -> Collection:
-        """Get or create ChromaDB collection with configuration.
+    def get_collection(self) -> Collection:
+        """Get existing ChromaDB collection (read-only operations).
 
-        Args:
-            embedding_function: Optional custom embedding function.
-                              If None, uses OpenAI embeddings.
+        Use this method for read, query, and delete operations that don't
+        require an embedding function.
 
         Returns:
             ChromaDB Collection instance
+
+        Raises:
+            ValueError: If collection doesn't exist
         """
-        import os
-
-        from chromadb.utils import embedding_functions
-
         client = self.get_client()
 
-        if embedding_function is None:
-            embedding_function = embedding_functions.OpenAIEmbeddingFunction(
-                api_key=os.getenv("OPENAI_API_KEY", ""),
-                model_name=self.embedding_model,
-            )
+        try:
+            return client.get_collection(name=self.collection_name)
+        except Exception as e:
+            raise ValueError(
+                f"Collection '{self.collection_name}' does not exist. "
+                "Use get_or_create_collection() with an embedding function first."
+            ) from e
+
+    def get_or_create_collection(self, embedding_function: Any) -> Collection:
+        """Get or create ChromaDB collection with embedding function.
+
+        Use this method when writing embeddings or when the embedding function
+        is needed for collection creation.
+
+        Args:
+            embedding_function: Embedding function (e.g., OpenAIEmbeddingFunction).
+                              Required - caller must provide the appropriate function.
+
+        Returns:
+            ChromaDB Collection instance
+
+        Example:
+            >>> from chromadb.utils import embedding_functions
+            >>> import os
+            >>>
+            >>> # Asset provides the embedding function
+            >>> emb_fn = embedding_functions.OpenAIEmbeddingFunction(
+            ...     api_key=os.getenv("OPENAI_API_KEY"),
+            ...     model_name="text-embedding-3-large"
+            ... )
+            >>> collection = chromadb.get_or_create_collection(emb_fn)
+        """
+        client = self.get_client()
 
         return client.get_or_create_collection(
             name=self.collection_name,
@@ -87,7 +114,7 @@ class ChromaDBResource(ConfigurableResource):
         Returns:
             Number of chunks deleted
         """
-        collection = self.get_or_create_collection()
+        collection = self.get_collection()
 
         # Get chunks matching document ID
         chunks = collection.get(where={"document_id": {"$eq": document_id}}, include=[])
