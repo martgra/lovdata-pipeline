@@ -48,7 +48,6 @@ def cleanup_changed_documents(
         context.log.info("No files removed or modified - skipping cleanup")
         return {"deleted_chunks": 0, "files_removed": 0, "files_modified": 0}
 
-    collection = chromadb.get_collection()
     total_deleted = 0
     removed_count = 0
     modified_count = 0
