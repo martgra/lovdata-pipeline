@@ -1,0 +1,11 @@
+# Changes here will be overwritten by Copier; NEVER EDIT MANUALLY
+_commit: v1.0.2
+_src_path: gh:martgra/python_template
+github_username: martgra
+project_name: lovdata-pipeline
+use_devcontainer: true
+use_github_actions: true
+use_proxy: true
+use_vscode: true
+user_email: martgra@gmail.com
+user_name: Martin Gran

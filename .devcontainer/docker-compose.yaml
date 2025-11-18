@@ -1,0 +1,20 @@
+services:
+  app:
+    build:
+      args:
+        VARIANT: 3.13-bookworm
+      context: ..
+      dockerfile: .devcontainer/Dockerfile
+    command: sleep infinity
+    user: vscode
+    volumes:
+    - ../:/workspace:cached
+    - lovdata_pipeline_extensions:/home/vscode/.vscode-server/extensions
+    - lovdata_pipeline_commandhistory:/home/vscode/commandhistory
+    - lovdata_pipeline_cache:/home/vscode/.cache
+    - /workspace/.venv
+version: '3.8'
+volumes:
+  lovdata_pipeline_cache: null
+  lovdata_pipeline_commandhistory: null
+  lovdata_pipeline_extensions: null
