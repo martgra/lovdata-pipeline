@@ -18,7 +18,7 @@ from lovdata_pipeline.resources import LovligResource
 
 
 @asset(group_name="ingestion", compute_kind="lovlig")
-def lovdata_sync(context, lovlig: LovligResource) -> dict[str, int]:
+def lovdata_sync(context, lovlig: LovligResource) -> dict[str, int]:  # pylint: disable=redefined-outer-name
     """Sync Lovdata datasets using lovlig library.
 
     This asset uses the lovlig library to download, extract, and track
@@ -53,7 +53,7 @@ def lovdata_sync(context, lovlig: LovligResource) -> dict[str, int]:
 
 
 @asset(group_name="ingestion", compute_kind="lovlig")
-def changed_legal_documents(
+def changed_legal_documents(  # pylint: disable=redefined-outer-name
     context,
     config: IngestionConfig,
     lovlig: LovligResource,

@@ -74,6 +74,13 @@ disable = ["E0401", "C0114", "R0903", "E0237","E1142","E0014","E1300","E0013","E
 
 [tool.deptry]
 known_first_party = ["lovdata_pipeline"]
+# Ignore dependencies that are used but not directly imported
+# - lxml: Used in parsers/lovdata_xml_parser.py (imported in try/except block)
+# - openai: Used via dagster-openai wrapper (not directly imported)
+# - pydantic: Used via Dagster's Config and ConfigurableResource (not directly imported)
+# - dagster-webserver: Runtime dependency for Dagster UI (not imported in code)
+# - pydantic-settings: Installed for potential future use with Dagster
+ignore = ["DEP002"]
 
 [tool.pytest]
 testpaths = ["tests"]

@@ -96,7 +96,7 @@ def cleanup_changed_documents(
 
 @asset(group_name="loading", compute_kind="chromadb")
 @observe(name="verify-chromadb")
-def vector_database(
+def vector_database(  # pylint: disable=redefined-outer-name
     context,
     chromadb: ChromaDBResource,
     document_embeddings: dict,
@@ -132,6 +132,7 @@ def vector_database(
         f"Collection now contains {collection_count} total chunks."
     )
 
+    # pylint: disable=not-context-manager
     with langfuse.start_as_current_observation(as_type="span", name="chromadb-verify") as obs:
         obs.update(
             output={"verified": True, "collection_count": collection_count},

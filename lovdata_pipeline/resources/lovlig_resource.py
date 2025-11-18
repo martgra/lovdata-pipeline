@@ -14,7 +14,6 @@ from dagster import ConfigurableResource
 if TYPE_CHECKING:
     try:
         from lovdata_processing import (
-            FileQueryService,
             StateManager,
             sync_datasets,
         )

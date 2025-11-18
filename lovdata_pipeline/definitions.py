@@ -35,7 +35,7 @@ from lovdata_pipeline.resources import ChromaDBResource, LovligResource
 # ============================================================================
 
 # Main processing job that runs all assets
-lovdata_processing_job = define_asset_job(
+lovdata_processing_job = define_asset_job(  # pylint: disable=assignment-from-no-return
     name="lovdata_processing_job",
     selection=AssetSelection.all(),
     description="Complete pipeline for processing Lovdata legal documents",
@@ -43,7 +43,7 @@ lovdata_processing_job = define_asset_job(
 )
 
 # Sync-only job for testing/debugging
-lovdata_sync_only_job = define_asset_job(
+lovdata_sync_only_job = define_asset_job(  # pylint: disable=assignment-from-no-return
     name="lovdata_sync_only_job",
     selection=AssetSelection.assets(lovdata_sync),
     description="Only sync Lovdata datasets without processing",

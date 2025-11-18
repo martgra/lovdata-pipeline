@@ -24,7 +24,7 @@ from lovdata_pipeline.utils import estimate_tokens
 
 @asset(group_name="transformation", compute_kind="openai", ins={"parsed_legal_chunks": AssetIn(key="parsed_legal_chunks", input_manager_key="chunks_io_manager")})
 @observe(name="generate-embeddings-batch")
-def document_embeddings(
+def document_embeddings(  # pylint: disable=too-many-positional-arguments
     context,
     config: EmbeddingConfig,
     openai: OpenAIResource,
@@ -173,6 +173,7 @@ def document_embeddings(
 
             while retries < max_retries:
                 try:
+                    # pylint: disable=not-context-manager
                     with langfuse.start_as_current_observation(
                         as_type="embedding", name=f"batch-{batch_num}"
                     ) as obs:

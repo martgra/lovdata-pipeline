@@ -89,7 +89,7 @@ class CheckpointService:
         """
         return self.checkpoint_dir / f"{operation}_{run_id}.json"
 
-    def save(
+    def save(  # pylint: disable=too-many-positional-arguments
         self,
         run_id: str,
         last_batch: int,
