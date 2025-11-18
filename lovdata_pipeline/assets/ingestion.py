@@ -8,13 +8,13 @@ This module contains Dagster assets for:
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from dagster import asset
 
 from lovdata_pipeline.parsers import LovdataXMLParser
 from lovdata_pipeline.resources import LovligResource
+from lovdata_pipeline.services import FileService
 
 
 @asset(group_name="ingestion", compute_kind="lovlig")
@@ -111,33 +111,28 @@ def changed_legal_documents(
         }
     )
 
-    # Return metadata - store file list in a temp file to avoid pickling issues
-    try:
-        metadata_file = Path("data/temp_file_list.json")
-        metadata_file.parent.mkdir(parents=True, exist_ok=True)
+    # Return metadata - store file list in a temp file using FileService
+    metadata_file = Path("data/temp_file_list.json")
+    metadata_data = {
+        "file_metadata": all_file_meta,
+        "batch_size": batch_size,
+        "total_files": files_to_process,
+    }
 
-        with open(metadata_file, "w") as f:
-            json.dump(
-                {
-                    "file_metadata": all_file_meta,
-                    "batch_size": batch_size,
-                    "total_files": files_to_process,
-                },
-                f,
-            )
+    success = FileService.write_json(metadata_file, metadata_data)
+    if not success:
+        context.log.error("Failed to write metadata file")
+        raise RuntimeError("Failed to write metadata file")
 
-        context.log.info(f"Wrote file metadata to {metadata_file}")
+    context.log.info(f"Wrote file metadata to {metadata_file}")
 
-        result = {
-            "metadata_file": str(metadata_file),
-            "total_files": files_to_process,
-            "batch_size": batch_size,
-        }
-        context.log.info(f"Returning: {result}")
-        return result
-    except Exception as e:
-        context.log.error(f"Failed to write metadata: {e}", exc_info=True)
-        raise
+    result = {
+        "metadata_file": str(metadata_file),
+        "total_files": files_to_process,
+        "batch_size": batch_size,
+    }
+    context.log.info(f"Returning: {result}")
+    return result
 
 
 @asset(group_name="ingestion", compute_kind="xml_parsing")
@@ -167,17 +162,15 @@ def parsed_legal_chunks(context, changed_legal_documents: dict, lovlig: LovligRe
     Returns:
         Dict with chunks_file path and total_chunks count
     """
-    import json
     import os
 
-    # Load file metadata from temp file
+    # Load file metadata from temp file using FileService
     metadata_file = Path(changed_legal_documents["metadata_file"])
-    if not metadata_file.exists():
-        context.log.error(f"Metadata file not found: {metadata_file}")
-        return {"chunks_file": "", "total_chunks": 0}
+    metadata = FileService.read_json(metadata_file)
 
-    with open(metadata_file) as f:
-        metadata = json.load(f)
+    if not metadata:
+        context.log.error(f"Metadata file not found or invalid: {metadata_file}")
+        return {"chunks_file": "", "total_chunks": 0}
 
     file_metadata_list = metadata["file_metadata"]
     batch_size = metadata["batch_size"]
@@ -195,15 +188,8 @@ def parsed_legal_chunks(context, changed_legal_documents: dict, lovlig: LovligRe
         chunk_level="legalArticle", max_tokens=max_tokens, overlap_tokens=overlap_tokens
     )
 
-    # Write chunks to temp file to avoid pickling issues
-    import pickle
-
+    # Prepare chunks file path
     chunks_file = Path("data/temp_chunks.pickle")
-    chunks_file.parent.mkdir(parents=True, exist_ok=True)
-
-    # Remove old file if exists
-    if chunks_file.exists():
-        chunks_file.unlink()
 
     total_chunks = 0
     split_count = 0
@@ -214,8 +200,11 @@ def parsed_legal_chunks(context, changed_legal_documents: dict, lovlig: LovligRe
         f"(max_tokens={max_tokens}, overlap={overlap_tokens})"
     )
 
-    # Open file once for writing all batches
-    with open(chunks_file, "wb") as f:
+    # Create generator for streaming writes (memory efficient)
+    def generate_chunk_batches():
+        """Generator that yields chunk batches for streaming writes."""
+        nonlocal total_chunks, split_count, files_processed
+
         # Process files in batches
         for batch_start in range(0, len(file_metadata_list), batch_size):
             batch_end = min(batch_start + batch_size, len(file_metadata_list))
@@ -245,35 +234,40 @@ def parsed_legal_chunks(context, changed_legal_documents: dict, lovlig: LovligRe
                     context.log.error(f"Failed to parse {file_meta}: {e}")
                     continue
 
-            # Write batch to file
             if batch_chunks:
-                pickle.dump(batch_chunks, f)
                 total_chunks += len(batch_chunks)
 
-            # Log progress after each batch
-            context.log.info(
-                f"Batch complete: {files_processed}/{total_files} files processed, "
-                f"{total_chunks} total chunks written"
-            )  # Clean up temp file
-    try:
-        metadata_file.unlink()
-    except Exception:
-        pass
+                # Log progress after each batch
+                context.log.info(
+                    f"Batch complete: {files_processed}/{total_files} files processed, "
+                    f"{total_chunks} total chunks written"
+                )
+
+                yield batch_chunks
+
+    # Write chunks using FileService (streaming, memory-efficient)
+    total_chunks_written, batches_written = FileService.write_chunks_streaming(
+        chunks_file, generate_chunk_batches()
+    )
+
+    # Clean up temp metadata file using FileService
+    FileService.cleanup_temp_files(metadata_file)
 
     context.log.info(
-        f"Parsed {total_chunks} chunks from {files_processed} files "
-        f"({split_count} chunks were split)"
+        f"Parsed {total_chunks_written} chunks from {files_processed} files "
+        f"({split_count} chunks were split) in {batches_written} batches"
     )
 
     context.add_output_metadata(
         {
-            "total_chunks": total_chunks,
+            "total_chunks": total_chunks_written,
             "files_processed": files_processed,
             "chunks_split": split_count,
+            "batches_written": batches_written,
             "avg_chunks_per_file": (
-                round(total_chunks / files_processed, 2) if files_processed > 0 else 0
+                round(total_chunks_written / files_processed, 2) if files_processed > 0 else 0
             ),
         }
     )
 
-    return {"chunks_file": str(chunks_file), "total_chunks": total_chunks}
+    return {"chunks_file": str(chunks_file), "total_chunks": total_chunks_written}

@@ -8,7 +8,6 @@ This module contains Dagster assets for:
 
 from __future__ import annotations
 
-import json
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -17,66 +16,9 @@ from dagster import asset
 from dagster_openai import OpenAIResource
 from langfuse import get_client, observe
 
-from lovdata_pipeline.parsers import LegalChunk
 from lovdata_pipeline.resources import ChromaDBResource
-
-
-def estimate_tokens(text: str) -> int:
-    """Estimate token count for text (approximation: 1 token ≈ 4 characters)."""
-    return len(text) // 4
-
-
-def create_token_aware_batches(
-    chunks: list[LegalChunk],
-    max_batch_size: int,
-    max_tokens_per_chunk: int = 8192,
-    max_tokens_per_batch: int = 250_000,
-) -> tuple[list[list[LegalChunk]], list[LegalChunk]]:
-    """Create batches that respect both size and token limits.
-
-    Args:
-        chunks: List of chunks to batch
-        max_batch_size: Maximum number of chunks per batch (OpenAI limit: 2,048)
-        max_tokens_per_chunk: Maximum tokens for individual chunk (OpenAI limit: 8,192)
-        max_tokens_per_batch: Maximum total tokens per batch (OpenAI limit: 300,000)
-
-    Returns:
-        Tuple of (batches, oversized_chunks)
-        - batches: List of chunk batches that fit within limits
-        - oversized_chunks: Chunks that exceed max_tokens_per_chunk individually
-    """
-    batches = []
-    current_batch = []
-    current_tokens = 0
-    oversized_chunks = []
-
-    for chunk in chunks:
-        chunk_tokens = estimate_tokens(chunk.content)
-
-        # If single chunk exceeds per-chunk limit, skip it and track for reporting
-        if chunk_tokens > max_tokens_per_chunk:
-            chunk.metadata["oversized"] = True
-            chunk.metadata["estimated_tokens"] = chunk_tokens
-            oversized_chunks.append(chunk)
-            continue  # Skip this chunk - don't add to any batch
-
-        # Start new batch if adding this chunk would exceed limits
-        if current_batch and (
-            len(current_batch) >= max_batch_size
-            or current_tokens + chunk_tokens > max_tokens_per_batch
-        ):
-            batches.append(current_batch)
-            current_batch = []
-            current_tokens = 0
-
-        current_batch.append(chunk)
-        current_tokens += chunk_tokens
-
-    # Add final batch
-    if current_batch:
-        batches.append(current_batch)
-
-    return batches, oversized_chunks
+from lovdata_pipeline.services import CheckpointService, EmbeddingService, FileService
+from lovdata_pipeline.utils import estimate_tokens
 
 
 @asset(group_name="transformation", compute_kind="openai")
@@ -115,9 +57,8 @@ def document_embeddings(
         Dict with statistics about processed embeddings
     """
     import os
-    import pickle
 
-    # Load chunks from file
+    # Load chunks from file using FileService
     chunks_file = Path(parsed_legal_chunks["chunks_file"])
     total_chunks = parsed_legal_chunks["total_chunks"]
 
@@ -127,15 +68,8 @@ def document_embeddings(
 
     context.log.info(f"Processing {total_chunks} chunks from {chunks_file} (streaming)...")
 
-    # Load all chunks into batches (but we'll process one at a time)
-    all_chunks = []
-    with open(chunks_file, "rb") as f:
-        while True:
-            try:
-                batch_chunks = pickle.load(f)
-                all_chunks.extend(batch_chunks)
-            except EOFError:
-                break
+    # Load all chunks using FileService (memory-efficient streaming)
+    all_chunks = FileService.load_all_chunks(chunks_file)
 
     context.log.info(f"Loaded {len(all_chunks)} chunks, will process in streaming batches")
 
@@ -147,10 +81,8 @@ def document_embeddings(
     max_retries = 3
     enable_checkpointing = os.getenv("ENABLE_EMBEDDING_CHECKPOINT", "true").lower() == "true"
 
-    # Checkpoint file for resume capability
-    checkpoint_dir = Path("data/checkpoints")
-    checkpoint_dir.mkdir(parents=True, exist_ok=True)
-    checkpoint_file = checkpoint_dir / f"embeddings_{context.run_id}.json"
+    # Initialize checkpoint service for resume capability
+    checkpoint_service = CheckpointService(checkpoint_dir=Path("data/checkpoints"))
 
     context.log.info(
         f"Embedding configuration: max_batch_size={max_batch_size}, "
@@ -166,11 +98,13 @@ def document_embeddings(
         tags=["legal", "embeddings", "lovdata"],
     )
 
-    # Create token-aware batches
+    # Create token-aware batches using EmbeddingService
     context.log.info(f"Creating token-aware batches for {len(all_chunks)} chunks...")
-    batches, oversized_chunks = create_token_aware_batches(
+    batch_result = EmbeddingService.create_token_aware_batches(
         all_chunks, max_batch_size, max_tokens_per_chunk, max_tokens_per_batch
     )
+    batches = batch_result.batches
+    oversized_chunks = batch_result.oversized_chunks
     total_batches = len(batches)
 
     if oversized_chunks:
@@ -185,8 +119,8 @@ def document_embeddings(
             )
 
     context.log.info(
-        f"Created {total_batches} batches for {len(parsed_legal_chunks) - len(oversized_chunks)} chunks "
-        f"(avg {(len(parsed_legal_chunks) - len(oversized_chunks)) / total_batches:.1f} chunks/batch)"
+        f"Created {total_batches} batches for {batch_result.total_chunks - len(oversized_chunks)} chunks "
+        f"(avg {batch_result.avg_batch_size:.1f} chunks/batch)"
     )
 
     # Load checkpoint if exists and checkpointing is enabled
@@ -194,23 +128,17 @@ def document_embeddings(
     start_batch = 1
     processed_chunk_ids = set()
 
-    if enable_checkpointing and checkpoint_file.exists():
-        try:
-            with open(checkpoint_file) as f:
-                checkpoint = json.load(f)
-                start_batch = checkpoint.get("last_batch", 0) + 1
-                processed_chunk_ids = set(checkpoint.get("processed_chunk_ids", []))
-                total_embedded = len(processed_chunk_ids)
+    if enable_checkpointing:
+        checkpoint = checkpoint_service.load(run_id=str(context.run_id), operation="embeddings")
+        if checkpoint:
+            start_batch = checkpoint.last_batch + 1
+            processed_chunk_ids = checkpoint.processed_ids
+            total_embedded = checkpoint.total_processed
 
             context.log.info(
                 f"Resuming from checkpoint: {total_embedded} chunks already embedded, "
                 f"starting from batch {start_batch}/{total_batches}"
             )
-        except Exception as e:
-            context.log.warning(f"Failed to load checkpoint: {e}. Starting from scratch.")
-            total_embedded = 0
-            start_batch = 1
-            processed_chunk_ids = set()
 
     # Get ChromaDB collection for streaming writes
     collection = chromadb.get_or_create_collection()
@@ -296,17 +224,15 @@ def document_embeddings(
 
                     # Save checkpoint with only IDs (not full embeddings!)
                     if enable_checkpointing:
-                        try:
-                            checkpoint_data = {
-                                "last_batch": batch_num,
-                                "processed_chunk_ids": list(processed_chunk_ids),
-                                "timestamp": datetime.now(UTC).isoformat(),
-                                "total_embedded": total_embedded,
-                            }
-                            with open(checkpoint_file, "w") as f:
-                                json.dump(checkpoint_data, f)
-                        except Exception as e:
-                            context.log.warning(f"Failed to save checkpoint: {e}")
+                        success = checkpoint_service.save(
+                            run_id=str(context.run_id),
+                            operation="embeddings",
+                            last_batch=batch_num,
+                            processed_ids=processed_chunk_ids,
+                            total_processed=total_embedded,
+                        )
+                        if not success:
+                            context.log.warning("Failed to save checkpoint")
 
                     break
 
@@ -342,19 +268,16 @@ def document_embeddings(
     langfuse.flush()
 
     # Clean up checkpoint file on successful completion
-    if enable_checkpointing and checkpoint_file.exists():
-        try:
-            checkpoint_file.unlink()
+    if enable_checkpointing:
+        if checkpoint_service.delete(run_id=str(context.run_id), operation="embeddings"):
             context.log.info("Checkpoint cleaned up after successful completion")
-        except Exception as e:
-            context.log.warning(f"Failed to clean up checkpoint: {e}")
+        else:
+            context.log.warning("Failed to clean up checkpoint")
 
-    # Clean up temporary chunks file
-    try:
-        chunks_file.unlink()
-        context.log.info(f"Cleaned up chunks file: {chunks_file}")
-    except Exception as e:
-        context.log.warning(f"Failed to clean up chunks file: {e}")
+    # Clean up temporary chunks file using FileService
+    deleted = FileService.cleanup_temp_files(chunks_file)
+    if deleted:
+        context.log.info(f"Cleaned up temp files: {deleted}")
 
     # Verify final count
     final_collection_count = collection.count()

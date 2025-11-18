@@ -11,6 +11,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from lovdata_pipeline.utils import estimate_tokens
+
 if TYPE_CHECKING:
     import lxml.etree as ET
 else:
@@ -18,11 +20,6 @@ else:
         import lxml.etree as ET  # type: ignore
     except ImportError:
         ET = None  # type: ignore
-
-
-def estimate_tokens(text: str) -> int:
-    """Estimate token count for text (approximation: 1 token ≈ 4 characters)."""
-    return len(text) // 4
 
 
 @dataclass
