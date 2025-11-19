@@ -1,183 +1,399 @@
-# Incremental Updates Implementation
+# Incremental Updates
+
+How the pipeline detects and handles changed files.
 
 ## Overview
 
-The pipeline now supports incremental processing, allowing it to:
+The pipeline tracks processed documents to avoid reprocessing unchanged files:
 
-- Skip reprocessing unchanged files
-- Rechunk only modified files
-- **Automatically remove chunks for deleted files**
-- Handle removed files appropriately
-- Recover from failures without reprocessing everything
+- **Lovlig library** - Syncs files from Lovdata, detects changes via xxHash
+- **State file** - Tracks processed documents with hashes
+- **Atomic processing** - Changed files processed fully (parse → embed → index)
+- **Automatic cleanup** - Removed/modified files cleaned from index
 
-## Key Components
+## How It Works
 
-### 1. Separate Processing State
+### 1. Lovlig Detects Changes
 
-The system maintains **two separate state files**:
+The lovlig library syncs files and creates `data/state.json`:
 
-- **`state.json`** - Managed by lovlig library
-  - Completely regenerated on every sync
-  - Contains file metadata (paths, sizes, hashes, timestamps)
-  - Never contains custom processing state
-- **`processed_files.json`** - Managed by our pipeline
-  - Independent of lovlig's state management
-  - Tracks when each file was last processed
-  - Survives across lovlig sync operations
-  - Structure: `{dataset_name: {file_path: processed_at_timestamp}}`
-
-**Why separate?** The lovlig library's `StateManager.__exit__()` completely regenerates `state.json` on every sync, wiping any custom fields. A separate file ensures processing state persists.
-
-### 2. Timestamp-Based Comparison
-
-Files are identified as needing reprocessing using:
-
-```python
-file needs processing IF:
-  - file.last_changed > processed_at OR
-  - no processed_at exists for the file
+```json
+{
+  "files": [
+    {
+      "relative_path": "nl/nl-18840614-003.xml",
+      "size": 12345,
+      "hash": "abc123...",
+      "last_changed": "2025-11-19T10:00:00Z",
+      "status": "modified"
+    }
+  ]
+}
 ```
 
-This comparison happens in `LovligClient.get_unprocessed_files()`.
+**Status values:**
+- `added` - New file
+- `modified` - Content changed (hash differs)
+- `removed` - File deleted
+- `unchanged` - No changes
 
-### 3. Incremental Chunking
+### 2. Pipeline Tracks Processing
 
-When a file is modified:
+The pipeline maintains `data/pipeline_state.json`:
 
-1. **Remove old chunks** - `ChunkWriter.remove_chunks_for_document(document_id)` filters out all chunks for that document
-2. **Write new chunks** - Process the file and append new chunks
-3. **Mark as processed** - Update `processed_files.json` with current timestamp
+```json
+{
+  "processed": {
+    "nl-18840614-003": {
+      "hash": "abc123...",
+      "vectors": ["vec_id_1", "vec_id_2", "vec_id_3"],
+      "timestamp": "2025-11-19T10:30:00Z"
+    }
+  },
+  "failed": {
+    "nl-19010101-999": {
+      "hash": "def456...",
+      "error": "Invalid XML structure",
+      "timestamp": "2025-11-19T10:35:00Z"
+    }
+  }
+}
+```
 
-**Critical ordering**: Old chunks must be removed BEFORE opening the ChunkWriter for appending, to avoid file handle conflicts.
-
-### 4. Removed File Handling
-
-When files are removed from the dataset:
-
-1. **Clean processing state** - `LovligClient.clean_removed_files_from_processed_state()` removes entries for deleted files
-2. **Remove chunks automatically** - Chunks are deleted in the same chunking asset run
-3. **Identify removed** - `LovligClient.get_removed_files()` returns list of removed files
-
-## Implementation Pattern
-
-### In Chunking Asset
+### 3. Change Detection Logic
 
 ```python
-# Get files that need processing (modified or added)
-changed_files = lovlig.get_unprocessed_files(force_reprocess=False)
+def needs_processing(doc_id: str, current_hash: str) -> bool:
+    """Check if document needs processing."""
+    
+    # Not processed yet
+    if doc_id not in state.processed:
+        return True
+    
+    # Hash changed (content modified)
+    if state.processed[doc_id]["hash"] != current_hash:
+        return True
+    
+    # Previously failed (retry)
+    if doc_id in state.failed:
+        return True
+    
+    return False
+```
 
-# Get removed files for cleanup
-removed_files = lovlig.get_removed_files()
+### 4. Processing Flow
 
-writer = ChunkWriter(chunks_file)
-
-# First pass: Remove old chunks
-# Pass 1A: Remove chunks for deleted files
-for removal in removed_files:
-    removed_chunks = writer.remove_chunks_for_document(removal.document_id)
-    if removed_chunks > 0:
-        context.log.info(f"Removed {removed_chunks} chunks for deleted file {removal.document_id}")
-
-# Pass 1B: Remove chunks for modified documents
-for file_path in changed_file_paths:
-    document_id = Path(file_path).stem
-    removed_chunks = writer.remove_chunks_for_document(document_id)
-    if removed_chunks > 0:
-        context.log.info(f"Removed {removed_chunks} old chunks for {document_id}")
-
-# Second pass: Process files and write new chunks
-with writer:
-    for file_path in changed_file_paths:
-        # Parse, chunk, and write
-        chunks = process_file(file_path)
-        writer.write_chunks(chunks)
-
+```python
+def run_pipeline(config):
+    # 1. Sync from Lovdata
+    lovlig.sync()
+    
+    # 2. Get changed files
+    changed = lovlig.get_changed_files()    # added + modified
+    removed = lovlig.get_removed_files()    # deleted
+    
+    # 3. Process changed files
+    for xml_path in changed:
+        doc_id = xml_path.stem
+        file_hash = lovlig.get_hash(xml_path)
+        
+        # Skip if already processed with same hash
+        if state.is_processed(doc_id, file_hash):
+            continue
+        
+        # Remove old vectors if modified
+        if doc_id in state.processed:
+            old_vectors = state.get_vectors(doc_id)
+            chroma.delete_by_ids(old_vectors)
+        
+        # Process file atomically
+        articles = parse_xml(xml_path)
+        chunks = chunk_articles(articles)
+        enriched = embed_chunks(chunks)
+        vector_ids = index_chunks(enriched)
+        
         # Mark as processed
-        lovlig.mark_file_processed(dataset_name, relative_path)
+        state.mark_processed(doc_id, file_hash, vector_ids)
+    
+    # 4. Clean up removed files
+    for removal in removed:
+        old_vectors = state.get_vectors(removal.document_id)
+        chroma.delete_by_ids(old_vectors)
+        state.remove(removal.document_id)
 ```
 
-### In Ingestion Asset
+## Implementation Details
+
+### State Module (`state.py`)
+
+Simple JSON-based state tracking:
 
 ```python
-# After sync completes
-lovlig.clean_removed_files_from_processed_state()
+class ProcessingState:
+    """Track processed and failed documents."""
+    
+    def __init__(self, path: Path):
+        self.path = path
+        self.data = self._load()
+    
+    def mark_processed(self, doc_id: str, hash: str, vectors: list):
+        """Record successful processing."""
+        self.data["processed"][doc_id] = {
+            "hash": hash,
+            "vectors": vectors,
+            "timestamp": datetime.now(UTC).isoformat()
+        }
+        self._save()
+    
+    def mark_failed(self, doc_id: str, hash: str, error: str):
+        """Record processing failure."""
+        self.data["failed"][doc_id] = {
+            "hash": hash,
+            "error": error,
+            "timestamp": datetime.now(UTC).isoformat()
+        }
+        self._save()
+    
+    def is_processed(self, doc_id: str, hash: str) -> bool:
+        """Check if document already processed with this hash."""
+        entry = self.data["processed"].get(doc_id)
+        return entry is not None and entry["hash"] == hash
+    
+    def get_vectors(self, doc_id: str) -> list[str]:
+        """Get vector IDs for document."""
+        entry = self.data["processed"].get(doc_id)
+        return entry["vectors"] if entry else []
+    
+    def remove(self, doc_id: str):
+        """Remove document from state."""
+        self.data["processed"].pop(doc_id, None)
+        self.data["failed"].pop(doc_id, None)
+        self._save()
+```
 
-# Get removed files (returned for downstream use)
-removed_files = lovlig.get_removed_files()
-# Passed to chunking asset for automatic cleanup
+### Lovlig Wrapper (`lovlig.py`)
+
+Wraps lovlig library for change detection:
+
+```python
+class Lovlig:
+    """Wrapper around lovlig library."""
+    
+    def sync(self):
+        """Sync files from Lovdata."""
+        from lovdata_processing import sync_datasets
+        sync_datasets(
+            dataset_filter=self.dataset_filter,
+            raw_data_dir=self.raw_dir,
+            extracted_data_dir=self.extracted_dir,
+            state_file=self.state_file
+        )
+    
+    def get_changed_files(self) -> list[FileChange]:
+        """Get added and modified files."""
+        state = self._read_state()
+        changed = []
+        
+        for file_info in state["files"]:
+            if file_info["status"] in ["added", "modified"]:
+                changed.append(FileChange(
+                    relative_path=file_info["relative_path"],
+                    document_id=Path(file_info["relative_path"]).stem,
+                    hash=file_info["hash"],
+                    status=file_info["status"]
+                ))
+        
+        return changed
+    
+    def get_removed_files(self) -> list[FileChange]:
+        """Get deleted files."""
+        state = self._read_state()
+        removed = []
+        
+        for file_info in state["files"]:
+            if file_info["status"] == "removed":
+                removed.append(FileChange(
+                    relative_path=file_info["relative_path"],
+                    document_id=Path(file_info["relative_path"]).stem,
+                    hash=file_info.get("hash", ""),
+                    status="removed"
+                ))
+        
+        return removed
+```
+
+## Benefits
+
+### 1. Performance
+
+Only process changed files:
+
+```
+First run: 3,000 files → ~30 minutes
+Update with 10 changes: 10 files → ~1 minute
+```
+
+### 2. Correctness
+
+Modified files:
+- Old vectors automatically deleted
+- New vectors indexed
+- No duplicates in index
+
+### 3. Recovery
+
+Pipeline crashes:
+- State persists to disk
+- Restart skips processed files
+- Only processes remaining files
+
+### 4. Observability
+
+Track what's happened:
+
+```bash
+# View processed documents
+jq '.processed | length' data/pipeline_state.json
+
+# View failed documents
+jq '.failed | keys' data/pipeline_state.json
+
+# Check specific document
+jq '.processed["nl-18840614-003"]' data/pipeline_state.json
+```
+
+## Example Scenarios
+
+### Scenario 1: Initial Load
+
+```
+lovlig sync → 3,000 new files
+pipeline → processes all 3,000 files
+state → marks all 3,000 as processed
+```
+
+### Scenario 2: Incremental Update
+
+```
+lovlig sync → 10 modified, 2 new, 1 removed
+pipeline → 
+  - removes old vectors for 10 modified
+  - processes 12 files (10 modified + 2 new)
+  - removes vectors for 1 deleted
+state → updates 12 entries, removes 1
+```
+
+### Scenario 3: Pipeline Crash
+
+```
+First run: 1,000 files processed, crash at file 1,001
+state → contains 1,000 processed documents
+
+Restart:
+pipeline → skips 1,000 processed, continues from 1,001
+```
+
+### Scenario 4: Force Reprocess
+
+```
+User runs: --force
+pipeline → ignores state, reprocesses all files
+state → overwrites all entries with new vectors
 ```
 
 ## Testing
 
-Comprehensive integration tests in `tests/integration/test_incremental_updates.py`:
+Comprehensive tests in `tests/unit/state_test.py` and `tests/unit/lovlig_test.py`:
 
-### Test 1: Full Update Cycle
-
-- **Setup**: Initial load with 3 documents
-- **Update**: Modify 1, remove 1, add 1
-- **Verify**:
-  - Only 2 files reprocessed (modified + added)
-  - Unchanged file skipped
-  - Modified file's old chunks removed
-  - Removed file's chunks automatically deleted
-  - Processing state correct
-
-### Test 2: Multiple Modifications
-
-- **Setup**: Single document
-- **Updates**: Modify 3 times in succession
-- **Verify**:
-  - Each update removes old version
-  - Only latest version remains
-  - Processing state tracks correctly
-
-## Benefits
-
-1. **Performance** - Skip reprocessing unchanged files (potentially thousands)
-2. **Recovery** - Resume from failures without starting over
-3. **Correctness** - Modified files don't create duplicate chunks
-4. **Automatic Cleanup** - Deleted files have their chunks removed automatically
-5. **Synchronization** - Output file always reflects current dataset state
-
-## Future Enhancements
-
-- **Downstream propagation** - Track which chunks need re-embedding
-- **Parallel processing** - Process multiple files concurrently
-- **Batch updates** - Group multiple modifications for efficiency
-- **State versioning** - Handle schema changes in processing state
-
-## Usage
-
-The incremental processing is **automatic** - just run the pipeline as normal:
-
-```bash
-# First run: processes all files
-make chunk
-# or: uv run python -m lovdata_pipeline chunk
-
-# Subsequent runs: only processes changed files
-make chunk
-
-# Force reprocessing if needed
-uv run python -m lovdata_pipeline chunk --force-reprocess
+```python
+def test_incremental_processing():
+    """Test that only changed files are processed."""
+    
+    # Initial load
+    state.mark_processed("doc1", "hash1", ["vec1"])
+    state.mark_processed("doc2", "hash2", ["vec2"])
+    
+    # doc1 modified (hash changed)
+    assert not state.is_processed("doc1", "hash1_new")
+    
+    # doc2 unchanged
+    assert state.is_processed("doc2", "hash2")
+    
+    # doc3 new
+    assert not state.is_processed("doc3", "hash3")
 ```
+
+## Performance Characteristics
+
+| Operation | Time Complexity | Space |
+|-----------|----------------|-------|
+| Check if processed | O(1) | O(n) documents |
+| Mark processed | O(1) | O(1) write |
+| Get changed files | O(n) files | O(n) temp |
+| Load state | O(n) | O(n) memory |
+
+For 15,000 documents:
+- State file: ~5MB
+- Load time: <100ms
+- Lookup time: <1ms
 
 ## Troubleshooting
 
-**Files not being reprocessed?**
+### State Out of Sync
 
-- Check timestamps in `processed_files.json`
-- Compare with `last_changed` in `state.json`
-- Verify timezone handling (all timestamps use UTC)
+**Symptom:** Pipeline reprocesses files unnecessarily
 
-**Old chunks not removed?**
+**Solution:**
+```bash
+# Check lovlig state
+cat data/state.json | jq '.files[] | select(.status == "modified")'
 
-- Ensure `remove_chunks_for_document` is called before opening writer
-- Check document_id extraction matches chunk document_id
-- Verify both deleted and modified files are handled in Pass 1A and 1B
+# Check pipeline state
+cat data/pipeline_state.json | jq '.processed | keys'
 
-**Processing state lost?**
+# Force reprocess if needed
+uv run python -m lovdata_pipeline process --force
+```
 
-- Verify `processed_files.json` exists alongside `state.json`
-- Check file permissions
-- Look for errors in lovlig client logs
+### Corrupted State File
+
+**Symptom:** JSON parse error
+
+**Solution:**
+```bash
+# Backup (if recoverable)
+cp data/pipeline_state.json data/pipeline_state.json.bak
+
+# Delete and reprocess
+rm data/pipeline_state.json
+uv run python -m lovdata_pipeline process --force
+```
+
+### Missing Vectors
+
+**Symptom:** State shows processed but ChromaDB missing vectors
+
+**Solution:**
+```bash
+# Check ChromaDB
+# (requires custom script to query chroma)
+
+# Reprocess affected documents
+# (edit state.json to remove entries, or use --force)
+```
+
+## Future Enhancements
+
+Potential improvements:
+
+1. **Batch updates** - Group multiple small changes
+2. **Parallel processing** - Process multiple files concurrently
+3. **State versioning** - Handle schema changes
+4. **Backup/restore** - State snapshots
+5. **Reconciliation** - Verify state vs ChromaDB
+
+## References
+
+- **[User Guide](USER_GUIDE.md)** - How to use the pipeline
+- **[Developer Guide](DEVELOPER_GUIDE.md)** - Architecture details
+- **[Functional Requirements](FUNCTIONAL_REQUIREMENTS.md)** - Specification

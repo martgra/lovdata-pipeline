@@ -1,6 +1,9 @@
 """Settings for Lovdata pipeline.
 
 Uses pydantic-settings to load configuration from environment variables.
+
+NOTE: The CLI currently uses command-line options instead of this settings module.
+This module is provided for programmatic usage and advanced configurations.
 """
 
 from pathlib import Path
@@ -15,96 +18,66 @@ class LovdataSettings(BaseSettings):
     All settings can be overridden via environment variables with LOVDATA_ prefix.
 
     Attributes:
-        dataset_filter: Filter for datasets to sync (e.g., 'gjeldende')
-        raw_data_dir: Directory for raw downloaded archives
-        extracted_data_dir: Directory for extracted XML files
-        state_file: Path to lovlig state.json file
-        max_download_concurrency: Maximum concurrent downloads
+        dataset_filter: Filter for datasets to sync (e.g., 'gjeldende-lover')
+        data_dir: Base data directory
         chunk_max_tokens: Maximum tokens per chunk for document splitting
-        chunk_output_path: Path to output JSONL file for chunks
+        embedding_model: OpenAI embedding model
+        openai_api_key: OpenAI API key for embeddings
+        chroma_path: Path to ChromaDB persistent storage
+        force_reprocess: Force reprocessing of all files
     """
 
     model_config = SettingsConfigDict(env_prefix="LOVDATA_", env_file=".env", extra="ignore")
 
-    dataset_filter: str = Field(default="gjeldende", description="Dataset filter pattern")
-    raw_data_dir: Path = Field(default=Path("./data/raw"), description="Raw data directory")
-    extracted_data_dir: Path = Field(
-        default=Path("./data/extracted"), description="Extracted data directory"
+    # Core settings
+    dataset_filter: str = Field(
+        default="gjeldende", description="Dataset filter pattern (gjeldende, gjeldende-lover, etc.)"
     )
-    state_file: Path = Field(default=Path("./data/state.json"), description="State file path")
-    max_download_concurrency: int = Field(
-        default=4, ge=1, le=10, description="Max concurrent downloads"
-    )
+    data_dir: Path = Field(default=Path("./data"), description="Base data directory")
+
+    # Processing settings
     chunk_max_tokens: int = Field(
         default=6800, ge=100, le=100000, description="Maximum tokens per chunk"
     )
-    chunk_output_path: Path = Field(
-        default=Path("./data/chunks/legal_chunks.jsonl"), description="Chunk output file path"
-    )
-    force_reprocess: bool = Field(
-        default=False,
-        description="Force reprocessing of all files, ignoring processed_at timestamps",
-    )
 
     # Embedding settings
-    enriched_data_dir: Path = Field(
-        default=Path("./data/enriched"), description="Directory for enriched chunks with embeddings"
-    )
     embedding_model: str = Field(
         default="text-embedding-3-large",
         description="OpenAI embedding model to use",
     )
-    embedding_batch_size: int = Field(
-        default=100, ge=1, le=2048, description="Batch size for embedding API calls"
-    )
-    force_reembed: bool = Field(
-        default=False,
-        description="Force re-embedding of all files, ignoring embedded_at timestamps",
-    )
     openai_api_key: str = Field(default="", description="OpenAI API key for embeddings")
 
-    # Vector database settings
-    vector_db_type: str = Field(
-        default="chroma",
-        description="Vector database type (currently only 'chroma' is supported)",
-    )
-    vector_db_collection: str = Field(
-        default="legal_docs",
-        description="Collection/index name for vector database",
+    # ChromaDB settings
+    chroma_path: Path = Field(
+        default=Path("./data/chroma"),
+        description="Path to ChromaDB persistent storage",
     )
 
-    # ChromaDB-specific settings (used when vector_db_type='chroma')
-    chroma_mode: str = Field(
-        default="persistent",
-        description="ChromaDB mode: 'memory', 'persistent', or 'client'",
-    )
-    chroma_host: str = Field(
-        default="localhost",
-        description="ChromaDB server host (used in 'client' mode)",
-    )
-    chroma_port: int = Field(
-        default=8000,
-        description="ChromaDB server port (used in 'client' mode)",
-    )
-    chroma_persist_directory: str | None = Field(
-        default="./data/chroma",
-        description="Local directory for persistent storage (used in 'persistent' mode)",
-    )
-
-    # Pipeline manifest
-    pipeline_manifest_path: Path = Field(
-        default=Path("./data/pipeline_manifest.json"),
-        description="Path to pipeline manifest file",
+    # Pipeline control
+    force_reprocess: bool = Field(
+        default=False,
+        description="Force reprocessing of all files",
     )
 
     @property
-    def data_dir(self) -> Path:
-        """Get the base data directory.
+    def raw_dir(self) -> Path:
+        """Get raw data directory."""
+        return self.data_dir / "raw"
 
-        Returns:
-            Path to data directory
-        """
-        return Path("./data")
+    @property
+    def extracted_dir(self) -> Path:
+        """Get extracted data directory."""
+        return self.data_dir / "extracted"
+
+    @property
+    def state_file(self) -> Path:
+        """Get lovlig state file path."""
+        return self.data_dir / "state.json"
+
+    @property
+    def pipeline_state_file(self) -> Path:
+        """Get pipeline state file path."""
+        return self.data_dir / "pipeline_state.json"
 
 
 def get_settings() -> LovdataSettings:

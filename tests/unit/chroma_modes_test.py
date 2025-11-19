@@ -47,12 +47,25 @@ def test_mode_operations():
     """Test basic operations work in memory mode."""
     client = ChromaClient(mode="memory", collection_name="test_ops")
 
-    # Upsert
-    client.upsert(
-        ids=["doc1::v1::0"],
-        embeddings=[[0.1, 0.2, 0.3]],
-        metadatas=[{"document_id": "doc1"}]
+    # Create test chunk
+    from lovdata_pipeline.domain.models import EnrichedChunk
+    chunk = EnrichedChunk(
+        chunk_id="test_chunk_0",
+        document_id="doc1",
+        dataset_name="test",
+        content="Test content",
+        token_count=2,
+        section_heading="Test",
+        absolute_address="",
+        split_reason="none",
+        parent_chunk_id=None,
+        embedding=[0.1, 0.2, 0.3],
+        embedding_model="test-model",
+        embedded_at="2025-01-01T00:00:00Z",
     )
+
+    # Upsert
+    client.upsert([chunk])
 
     # Get vector IDs
     vector_ids = client.get_vector_ids(where={"document_id": "doc1"})

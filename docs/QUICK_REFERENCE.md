@@ -3,400 +3,305 @@
 ## Installation
 
 ```bash
+# Clone repository
+git clone https://github.com/martgra/lovdata-pipeline.git
+cd lovdata-pipeline
+
+# Install dependencies
 make install
 # or: uv sync
 ```
 
 ## Basic Usage
 
-### Run Complete Pipeline
+### Process Documents
 
 ```bash
-make full
-# or: uv run python -m lovdata_pipeline full
+# Run complete pipeline (processes changed files)
+uv run python -m lovdata_pipeline process
+
+# Force reprocess all files
+uv run python -m lovdata_pipeline process --force
+
+# With custom options
+uv run python -m lovdata_pipeline process \
+  --data-dir /custom/path \
+  --dataset gjeldende-lover \
+  --chunk-max-tokens 4000 \
+  --embedding-model text-embedding-3-small \
+  --chroma-path /custom/chroma
+
+# Process specific dataset
+uv run python -m lovdata_pipeline process --dataset gjeldende-lover
+
+# Process all available datasets
+uv run python -m lovdata_pipeline process --dataset "*"
 ```
 
-### Run Individual Steps
+### Check Status
 
 ```bash
-# Download datasets from Lovdata
-make sync
-# or: uv run python -m lovdata_pipeline sync
+# View pipeline statistics
+uv run python -m lovdata_pipeline status
 
-# Parse XML and create chunks
-make chunk
-# or: uv run python -m lovdata_pipeline chunk
-
-# Generate embeddings with OpenAI
-make embed
-# or: uv run python -m lovdata_pipeline embed
-
-# Index vectors in ChromaDB
-make index
-# or: uv run python -m lovdata_pipeline index
-
-# Clean up orphaned vectors
-make reconcile
-# or: uv run python -m lovdata_pipeline reconcile
+# With custom data directory
+uv run python -m lovdata_pipeline status --data-dir /custom/path
 ```
 
 ## CLI Options
 
-### Force Flags
+### `process` Command
 
-```bash
-# Force re-download all datasets
-uv run python -m lovdata_pipeline sync --force-download
+| Option               | Short | Default                  | Description                                                               |
+| -------------------- | ----- | ------------------------ | ------------------------------------------------------------------------- |
+| `--force`            | `-f`  | `false`                  | Reprocess all files (ignore state)                                        |
+| `--data-dir`         |       | `./data`                 | Data directory path                                                       |
+| `--dataset-filter`   |       | `gjeldende`              | Dataset: `gjeldende`, `gjeldende-lover`, `gjeldende-sentrale-forskrifter` |
+| `--chunk-max-tokens` |       | `6800`                   | Maximum tokens per chunk                                                  |
+| `--embedding-model`  |       | `text-embedding-3-large` | OpenAI embedding model                                                    |
+| `--chroma-path`      |       | `./data/chroma`          | ChromaDB storage path                                                     |
 
-# Force reprocess all files (ignore processed state)
-uv run python -m lovdata_pipeline chunk --force-reprocess
+### `status` Command
 
-# Force re-embed all chunks
-uv run python -m lovdata_pipeline embed --force-reembed
-
-# Force full reprocessing
-uv run python -m lovdata_pipeline full --force-download --force-reprocess
-```
+| Option       | Short | Default  | Description         |
+| ------------ | ----- | -------- | ------------------- |
+| `--data-dir` |       | `./data` | Data directory path |
 
 ## Configuration
+
+### Environment Variables
 
 Create `.env` file:
 
 ```bash
-# Dataset sync (required)
-# Options: 'gjeldende' (both), 'gjeldende-lover' (laws only, smaller),
-#          'gjeldende-sentrale-forskrifter' (regulations only)
-LOVDATA_DATASET_FILTER=gjeldende
-LOVDATA_RAW_DATA_DIR=./data/raw
-LOVDATA_EXTRACTED_DATA_DIR=./data/extracted
-LOVDATA_STATE_FILE=./data/state.json
-LOVDATA_MAX_DOWNLOAD_CONCURRENCY=4
+# Required
+OPENAI_API_KEY=sk-...
 
-# Chunking (optional, defaults shown)
-LOVDATA_CHUNK_MAX_TOKENS=6800
-LOVDATA_CHUNK_OUTPUT_PATH=./data/chunks/legal_chunks.jsonl
-
-# Embedding (required: API key)
-LOVDATA_OPENAI_API_KEY=sk-...
-LOVDATA_EMBEDDING_MODEL=text-embedding-3-large
-LOVDATA_EMBEDDING_BATCH_SIZE=100
-LOVDATA_ENRICHED_DATA_DIR=./data/enriched
-
-# Vector Database (defaults shown)
-LOVDATA_VECTOR_DB_TYPE=chroma                     # Only 'chroma' is supported
-LOVDATA_VECTOR_DB_COLLECTION=legal_docs
-
-# ChromaDB settings
-LOVDATA_CHROMA_MODE=persistent                    # memory|persistent|client
-LOVDATA_CHROMA_HOST=localhost                     # For client mode
-LOVDATA_CHROMA_PORT=8000                          # For client mode
-LOVDATA_CHROMA_PERSIST_DIRECTORY=./data/chroma    # For persistent mode
-
-# Weaviate settings (when LOVDATA_VECTOR_DB_TYPE=weaviate)
-# LOVDATA_WEAVIATE_URL=http://localhost:8080
-# LOVDATA_WEAVIATE_API_KEY=your-key
-
-# Qdrant settings (when LOVDATA_VECTOR_DB_TYPE=qdrant)
-# LOVDATA_QDRANT_URL=http://localhost:6333
-# LOVDATA_QDRANT_API_KEY=your-key
-
-LOVDATA_MANIFEST_PATH=./data/manifest.json
+# Optional (defaults shown)
+DATA_DIR=./data
+CHUNK_MAX_TOKENS=6800
+EMBEDDING_MODEL=text-embedding-3-large
+CHROMA_PATH=./data/chroma
 ```
 
-## ChromaDB Modes
+### Dataset Filters
 
-| Mode         | Storage       | Persistence        | Use Case                   |
-| ------------ | ------------- | ------------------ | -------------------------- |
-| `memory`     | RAM           | ❌ Lost on restart | Testing, development       |
-| `persistent` | Local disk    | ✅ Saved           | Production, single machine |
-| `client`     | Remote server | ✅ Saved           | Production, distributed    |
+| Filter                           | Description                         | Size  |
+| -------------------------------- | ----------------------------------- | ----- |
+| `gjeldende`                      | All laws + regulations              | ~10GB |
+| `gjeldende-lover`                | Laws only (recommended for testing) | ~2GB  |
+| `gjeldende-sentrale-forskrifter` | Regulations only                    | ~8GB  |
 
-## Development Commands
+## Make Commands
 
 ```bash
-# Run tests
-make test
-# or: uv run pytest
+# Installation
+make install         # Install dependencies (frozen)
+make update-deps     # Update dependencies
 
-# Check code quality
-make lint
-# or: uv run ruff check lovdata_pipeline tests
+# Running
+make process         # Run pipeline
+make status          # Show status
 
-# Format code
-make format
-# or: uv run ruff format lovdata_pipeline tests
+# Testing
+make test            # Run all tests
 
-# Check for secrets
-make secrets
-# or: uv run detect-secrets scan --baseline .secrets.baseline
+# Code Quality
+make lint            # Run linter (ruff)
+make format          # Format code with ruff
 
-# Clean cache files
-make clean
+# Utilities
+make clean           # Remove cache files
+make secrets         # Scan for secrets
+make check-tools     # Check if required tools are installed
+
+# GitHub (requires gh CLI)
+make github-create   # Create GitHub repository
+make github-push     # Push to GitHub
 ```
 
-## Project Structure
+## File Structure
 
 ```
-lovdata_pipeline/
-├── cli.py               # Command-line interface
-├── pipeline_steps.py    # Core pipeline functions
-├── config/              # Configuration
-├── domain/              # Business logic
-└── infrastructure/      # External systems
+lovdata-pipeline/
+├── data/
+│   ├── pipeline_state.json      # Processing state
+│   ├── state.json               # Lovlig state (file metadata)
+│   ├── raw/                     # Downloaded archives
+│   ├── extracted/               # Extracted XML files
+│   │   └── gjeldende-lover/
+│   └── chroma/                  # Vector database
+│       └── chroma.sqlite3
+│
+├── lovdata_pipeline/
+│   ├── cli.py                   # CLI commands
+│   ├── pipeline.py              # Atomic processing logic
+│   ├── state.py                 # State tracking
+│   ├── lovlig.py                # Lovlig wrapper
+│   ├── config/
+│   │   └── settings.py          # Settings (for programmatic use)
+│   ├── domain/                  # Business logic
+│   │   ├── models.py
+│   │   ├── parsers/
+│   │   └── splitters/
+│   └── infrastructure/          # External systems
+│       └── chroma_client.py
+│
+└── tests/
+    ├── unit/
+    └── integration/
 ```
-
-## Data Flow
-
-```
-Step 1: Sync
-  Lovdata API → data/raw/*.tar.bz2 → data/extracted/**/*.xml
-
-Step 2: Chunk
-  data/extracted/**/*.xml → data/chunks/legal_chunks.jsonl
-
-Step 3: Embed
-  data/chunks/*.jsonl → data/enriched/embedded_chunks.jsonl
-
-Step 4: Index
-  data/enriched/*.jsonl → ChromaDB
-```
-
-## State Files
-
-| File                 | Purpose                                                    |
-| -------------------- | ---------------------------------------------------------- |
-| `data/state.json`    | Lovlig sync state (file hashes, changes from Lovdata)      |
-| `data/manifest.json` | **Pipeline state** - tracks all stages (chunk/embed/index) |
 
 ## Common Tasks
 
-### Process Only New Changes
+### First-Time Setup
 
 ```bash
-# Default behavior - only processes changed files
-make full
+# 1. Clone and install
+git clone https://github.com/martgra/lovdata-pipeline.git
+cd lovdata-pipeline
+make install
+
+# 2. Configure
+echo "OPENAI_API_KEY=sk-..." > .env
+
+# 3. Test with small dataset (laws only)
+uv run python -m lovdata_pipeline process --dataset gjeldende-lover
+
+# 4. Scale to full dataset (all laws + regulations)
+uv run python -m lovdata_pipeline process --dataset gjeldende
+
+# 5. Or process all available datasets
+uv run python -m lovdata_pipeline process --dataset "*"
 ```
 
-### Reprocess Everything
+### Incremental Updates
 
 ```bash
-# Forces reprocessing of all files
-uv run python -m lovdata_pipeline full --force-download --force-reprocess
+# Initial processing
+uv run python -m lovdata_pipeline process
+
+# Later: only processes changed files
+uv run python -m lovdata_pipeline process
 ```
 
-### Check Pipeline Status
+### Reset and Reprocess
 
 ```bash
-# View lovlig state for sync status
-cat data/state.json | jq '.raw_datasets | to_entries[] | .value.files | length'
+# Delete state and vectors
+rm -rf data/pipeline_state.json data/chroma/
 
-# View pipeline manifest (all stages)
-cat data/manifest.json | jq '.documents | to_entries | length'
-
-# Count chunks
-wc -l data/chunks/legal_chunks.jsonl
-
-# Count enriched chunks
-wc -l data/enriched/embedded_chunks.jsonl
+# Reprocess everything
+uv run python -m lovdata_pipeline process --force
 ```
 
-### Debug Failed Files
-
-Check logs for error messages:
+### Development Workflow
 
 ```bash
-# Run with full logging
-uv run python -m lovdata_pipeline chunk 2>&1 | tee chunk.log
+# Install with dev dependencies
+make install-dev
 
-# Search for errors
-grep ERROR chunk.log
-grep "Failed to process" chunk.log
-```
+# Make changes
+# ... edit code ...
 
-### Query ChromaDB
+# Test
+make test
 
-```python
-from lovdata_pipeline.infrastructure.chroma_client import ChromaClient
+# Lint and format
+make lint
+make format
 
-client = ChromaClient(collection_name="legal_docs")
-
-# Get document count
-count = client.count()
-print(f"Documents in index: {count}")
-
-# Query by metadata
-results = client.query(
-    query_embeddings=[[0.1, 0.2, ...]],
-    n_results=5,
-    where={"document_id": "nl-1234"}
-)
-```
-
-## Scheduled Execution
-
-### Using Cron
-
-```bash
-# Run daily at 2 AM
-0 2 * * * cd /path/to/lovdata-pipeline && make full >> /var/log/lovdata-pipeline.log 2>&1
-```
-
-### Using Systemd Timer
-
-Create `/etc/systemd/system/lovdata-pipeline.service`:
-
-```ini
-[Unit]
-Description=Lovdata Pipeline
-
-[Service]
-Type=oneshot
-WorkingDirectory=/path/to/lovdata-pipeline
-ExecStart=/usr/local/bin/uv run python -m lovdata_pipeline full
-User=lovdata
-```
-
-Create `/etc/systemd/system/lovdata-pipeline.timer`:
-
-```ini
-[Unit]
-Description=Run Lovdata Pipeline Daily
-
-[Timer]
-OnCalendar=daily
-Persistent=true
-
-[Install]
-WantedBy=timers.target
-```
-
-Enable:
-
-```bash
-sudo systemctl enable lovdata-pipeline.timer
-sudo systemctl start lovdata-pipeline.timer
-```
-
-## Docker Usage
-
-### ChromaDB in Docker
-
-Run ChromaDB vector database in Docker:
-
-```bash
-# Start ChromaDB
-docker compose up -d
-
-# Stop ChromaDB
-docker compose down
-```
-
-### Pipeline in Docker (Optional)
-
-Build and run the pipeline in a container:
-
-```bash
-# Build image
-docker build -t lovdata-pipeline .
-
-# Run with mounted data directory
-docker run --rm \
-  -v $(pwd)/data:/data \
-  --env-file .env \
-  lovdata-pipeline \
-  uv run python -m lovdata_pipeline full
-
-# Or run individual steps
-docker run --rm -v $(pwd)/data:/data --env-file .env lovdata-pipeline uv run python -m lovdata_pipeline sync
+# Run pipeline
+uv run python -m lovdata_pipeline process
 ```
 
 ## Troubleshooting
 
-### Pipeline runs but doesn't process files
+### Check Logs
 
-**Cause:** Files already marked as processed
-**Solution:** Use force flags or delete state files
+Pipeline outputs detailed progress:
 
-```bash
-# Option 1: Force reprocess
-uv run python -m lovdata_pipeline chunk --force-reprocess
-
-# Option 2: Clear specific stage in manifest
-python -c "import json; m=json.load(open('data/manifest.json')); [d.get('stages',{}).pop('chunking',None) for d in m['documents'].values()]; json.dump(m,open('data/manifest.json','w'),indent=2)"
-make chunk
+```
+INFO Processing 156 changed files...
+INFO [1/156] nl-18840614-003: 42 chunks → embedded → indexed (8 vectors)
+INFO [2/156] nl-18840614-004: 18 chunks → embedded → indexed (3 vectors)
+...
 ```
 
-### Embedding fails with OpenAI errors
-
-**Cause:** Rate limits or invalid API key
-**Solution:** Check API key and reduce batch size
+### Inspect State
 
 ```bash
-# Check API key
-echo $LOVDATA_OPENAI_API_KEY
+# View processing state
+cat data/pipeline_state.json | jq '.'
 
-# Reduce batch size in .env
-LOVDATA_EMBEDDING_BATCH_SIZE=50
+# View lovlig state
+cat data/state.json | jq '.files[] | select(.status == "modified")'
+
+# Count processed documents
+jq '.processed | length' data/pipeline_state.json
 ```
 
-### ChromaDB connection fails
+### Common Errors
 
-**Cause:** ChromaDB server not running or wrong host/port
-**Solution:** Start ChromaDB or update configuration
+| Error                    | Solution                                        |
+| ------------------------ | ----------------------------------------------- |
+| `OPENAI_API_KEY not set` | Set in `.env` or export `OPENAI_API_KEY=sk-...` |
+| `Rate limit exceeded`    | Wait and retry (state persists)                 |
+| `database is locked`     | Kill other pipeline processes                   |
+| `Out of memory`          | Use smaller dataset or increase RAM             |
+| Invalid JSON in state    | Delete `data/pipeline_state.json` and reprocess |
+
+### Debug Mode
+
+Enable verbose logging:
+
+```python
+# In lovdata_pipeline/cli.py
+logging.basicConfig(level=logging.DEBUG, ...)
+```
+
+## Testing
 
 ```bash
-# Check if ChromaDB is running
-curl http://localhost:8000/api/v1/heartbeat
+# Run all tests
+uv run pytest tests/
 
-# Start ChromaDB (if using server mode)
-docker run -p 8000:8000 chromadb/chroma
+# Run specific test file
+uv run pytest tests/unit/state_test.py
 
-# Or use persistent mode (no server)
-LOVDATA_CHROMA_PERSIST_DIR=./data/chroma
+# Run specific test
+uv run pytest tests/unit/state_test.py::test_mark_processed
+
+# With coverage
+uv run pytest tests/ --cov=lovdata_pipeline --cov-report=html
+
+# View coverage
+open htmlcov/index.html
 ```
 
-### Out of memory during processing
+## Performance
 
-**Cause:** Large XML files or accumulation
-**Solution:** The pipeline is designed to be memory-safe; check for bugs
+### Approximate Times
 
-```bash
-# Monitor memory usage
-watch -n 1 'ps aux | grep python'
+| Dataset           | Files   | Time (first run) | Subsequent |
+| ----------------- | ------- | ---------------- | ---------- |
+| `gjeldende-lover` | ~3,000  | ~30 min          | ~1-2 min   |
+| `gjeldende`       | ~15,000 | ~3 hours         | ~5-10 min  |
 
-# Process fewer files at once (modify lovlig settings)
-LOVDATA_MAX_DOWNLOAD_CONCURRENCY=1
-```
+_Times vary based on network, CPU, and OpenAI rate limits._
 
-## Performance Tips
+### Cost Estimate
 
-### Speed up sync
+| Dataset           | Chunks  | Tokens | Cost (OpenAI) |
+| ----------------- | ------- | ------ | ------------- |
+| `gjeldende-lover` | ~10,000 | ~68M   | ~$9           |
+| `gjeldende`       | ~50,000 | ~340M  | ~$45          |
 
-- Increase concurrency: `LOVDATA_MAX_DOWNLOAD_CONCURRENCY=8`
-- Use fast network connection
+_Using text-embedding-3-large at $0.13/1M tokens._
 
-### Speed up chunking
+## Resources
 
-- Already optimized (single-threaded XML parsing)
-- Could parallelize across multiple processes (not implemented)
-
-### Speed up embedding
-
-- Increase batch size: `LOVDATA_EMBEDDING_BATCH_SIZE=200`
-- Use faster model: `LOVDATA_EMBEDDING_MODEL=text-embedding-3-small`
-- Upgrade OpenAI tier for higher rate limits
-
-### Speed up indexing
-
-- Use persistent ChromaDB (no network overhead)
-- Batch upserts (already implemented)
-
-## Additional Documentation
-
-For detailed implementation notes, see the `docs/archive/` directory:
-
-- Architecture details
-- Chunking implementation
-- Embedding implementation
-- ChromaDB integration
-- Pipeline manifest design
+- **[User Guide](USER_GUIDE.md)** - Complete usage guide
+- **[Developer Guide](DEVELOPER_GUIDE.md)** - Architecture and extending
+- **[Functional Requirements](FUNCTIONAL_REQUIREMENTS.md)** - Specification
+- **[GitHub Repository](https://github.com/martgra/lovdata-pipeline)** - Source code

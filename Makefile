@@ -1,7 +1,7 @@
 # Makefile for Lovdata pipeline
 SHELL := /bin/bash
 .DEFAULT_GOAL := install
-.PHONY: install update-deps test lint format clean run help check all secrets check-tools github-create github-push sync chunk embed index reconcile full
+.PHONY: install update-deps test lint format clean process status help check all secrets check-tools github-create github-push
 
 # Help target
 help:
@@ -11,13 +11,8 @@ help:
 	@echo "  test          - Run tests with pytest"
 	@echo "  lint          - Check code with ruff"
 	@echo "  format        - Format code with ruff"
-	@echo "  run           - Run the main application"
-	@echo "  sync          - Run dataset sync step"
-	@echo "  chunk         - Run document chunking step"
-	@echo "  embed         - Run embedding step"
-	@echo "  index         - Run vector indexing step"
-	@echo "  reconcile     - Reconcile index (remove ghost documents)"
-	@echo "  full          - Run complete pipeline"
+	@echo "  process       - Run complete pipeline (atomic per-file)"
+	@echo "  status        - Show pipeline status"
 	@echo "  clean         - Remove cache and temporary files"
 	@echo "  secrets       - Scan for secrets using detect-secrets"
 	@echo "  check-tools   - Check if required tools are installed"
@@ -43,26 +38,11 @@ lint:
 format:
 	uv run ruff format lovdata_pipeline tests
 
-run:
-	uv run python -m lovdata_pipeline
+process:
+	uv run python -m lovdata_pipeline process
 
-sync:
-	uv run python -m lovdata_pipeline sync
-
-chunk:
-	uv run python -m lovdata_pipeline chunk
-
-embed:
-	uv run python -m lovdata_pipeline embed
-
-index:
-	uv run python -m lovdata_pipeline index
-
-reconcile:
-	uv run python -m lovdata_pipeline reconcile
-
-full:
-	uv run python -m lovdata_pipeline full
+status:
+	uv run python -m lovdata_pipeline status
 
 secrets: .secrets.baseline
 	uv run detect-secrets scan --baseline .secrets.baseline

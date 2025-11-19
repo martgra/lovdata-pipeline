@@ -25,7 +25,7 @@ COPY lovdata_pipeline ./lovdata_pipeline
 RUN uv pip install -e .
 
 # Create data directory
-RUN mkdir -p /data/raw /data/extracted /data/chunks /data/enriched
+RUN mkdir -p /data/raw /data/extracted
 
 # Set working directory for data
 WORKDIR /data

@@ -4,7 +4,7 @@
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue?logo=python&logoColor=white)
 [![Copier](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/copier-org/copier/master/img/badge/badge-grayscale-inverted-border-orange.json)](https://github.com/copier-org/copier)
 
-A Python pipeline for processing Norwegian legal documents from Lovdata into a searchable vector database.
+A simple Python pipeline for processing Norwegian legal documents from Lovdata into a searchable vector database.
 
 ## Quick Start
 
@@ -12,42 +12,43 @@ A Python pipeline for processing Norwegian legal documents from Lovdata into a s
 # Install dependencies
 make install
 
-# Run complete pipeline
-make full
+# Run pipeline
+uv run python -m lovdata_pipeline process
 ```
 
-No servers, no orchestration - just Python commands.
+One command. Atomic per-file processing. Simple state tracking.
 
 ## Documentation
 
 ### For Users
 
 - **[User Guide](docs/USER_GUIDE.md)** - Installation, usage, configuration, troubleshooting
+- **[Quick Reference](docs/QUICK_REFERENCE.md)** - Command cheat sheet
 
 ### For Developers
 
 - **[Developer Guide](docs/DEVELOPER_GUIDE.md)** - Architecture, extending, testing, contributing
 - **[Functional Requirements](docs/FUNCTIONAL_REQUIREMENTS.md)** - Specification that all changes must satisfy
 
-### Reference
-
-- **[Quick Reference](docs/QUICK_REFERENCE.md)** - Command cheat sheet
-- **[Incremental Updates](docs/INCREMENTAL_UPDATES.md)** - How change detection works
-
 ## What It Does
 
-1. **Sync** - Downloads legal documents from Lovdata
-2. **Chunk** - Parses XML into searchable chunks
-3. **Embed** - Generates embeddings via OpenAI
-4. **Index** - Stores vectors in ChromaDB
+For each file:
 
-Only processes changed files. Resumes from failures.
+1. **Sync** - Download from Lovdata (via lovlig library)
+2. **Parse** - Extract articles from XML
+3. **Chunk** - Split into token-sized pieces
+4. **Embed** - Generate embeddings via OpenAI
+5. **Index** - Store in ChromaDB
+
+Atomic processing: each file completes fully before moving to the next.
 
 ## Key Features
 
-- **Incremental processing** - Only handles new/modified files
-- **Memory efficient** - Streams large datasets
-- **Simple CLI** - No servers or orchestration
+- **Atomic processing** - Complete each file before moving to next
+- **Simple state** - JSON file tracks processed/failed documents
+- **Change detection** - Uses lovlig library for file changes
+- **Automatic cleanup** - Removes vectors for deleted/modified files
+- **Single command** - No stages, no complex orchestration
 - **Quality tools** - Ruff, Pylint, Prek git hooks
 - **Dev container** - Reproducible environment
 
@@ -55,7 +56,7 @@ Only processes changed files. Resumes from failures.
 
 - Python ≥ 3.11
 - OpenAI API key (for embeddings)
-- ChromaDB (for vector storage)
+- ChromaDB (auto-installed)
 
 ## License
 

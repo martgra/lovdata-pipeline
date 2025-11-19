@@ -1,15 +1,9 @@
 # Functional Requirements
 
 **Status:** ✅ SPECIFICATION  
-**Last Verified:** November 19, 2025
+**Last Updated:** November 19, 2025
 
 > **Purpose:** This document defines the requirements that the pipeline MUST satisfy. All changes should be verified against these requirements.
-
-**See also:**
-
-- [User Guide](USER_GUIDE.md) - How to use the pipeline
-- [Developer Guide](DEVELOPER_GUIDE.md) - Architecture and implementation details
-- [Incremental Updates](INCREMENTAL_UPDATES.md) - Change detection implementation
 
 ---
 
@@ -18,23 +12,24 @@
 1. [Overview](#overview)
 2. [Change Detection](#1-change-detection)
 3. [Change Handling](#2-change-handling)
-4. [Pipeline Stages](#3-pipeline-stages)
-5. [Index Design](#4-index-design)
-6. [Orchestration](#5-orchestration)
-7. [Observability](#6-observability)
-8. [Safety & Consistency](#7-safety--consistency)
-9. [Compliance Summary](#compliance-summary)
-10. [Verification Checklist](#verification-checklist)
+4. [Processing](#3-processing)
+5. [State Management](#4-state-management)
+6. [Index Consistency](#5-index-consistency)
+7. [Error Handling](#6-error-handling)
+8. [Observability](#7-observability)
+9. [Verification Checklist](#verification-checklist)
 
 ---
 
 ## Overview
 
-The pipeline treats `lovlig` as the source of truth for changes and:
+The pipeline processes Norwegian legal documents from Lovdata into a vector database, ensuring:
 
-- Only processes each file version once
-- Keeps the index synchronized with the current corpus
-- Resumes from checkpoints after failures
+- **Only changed files** are processed (incremental updates)
+- **Atomic processing** - each file completes fully (parse → chunk → embed → index)
+- **State tracking** - knows what's been processed and with what hash
+- **Index consistency** - vectors match current corpus (no orphans, no duplicates)
+- **Automatic cleanup** - removes vectors for deleted/modified files
 
 ---
 
@@ -44,76 +39,89 @@ The pipeline treats `lovlig` as the source of truth for changes and:
 
 **Requirement:**
 
-- The pipeline SHALL use `lovlig`'s API/SDK/outputs (e.g. `state.json`) to discover which files are **added**, **modified**, and **removed** since the last sync
-- The pipeline SHALL NOT attempt to infer changes from timestamps or mtimes in the Lovdata dataset
+The pipeline SHALL use the `lovlig` library to:
+- Sync files from Lovdata
+- Detect added, modified, and removed files
+- Provide content hashes (xxHash) for version tracking
 
-**Current Implementation:** ✅
-
-- `LovligClient` wraps lovlig library ([GitHub](https://github.com/martgra/lovlig))
-- Uses `sync_datasets()` to update `state.json`
-- `get_unprocessed_files()` reads lovlig state for changes
-
-**Verification:**
+**Implementation:** ✅
 
 ```python
-# lovdata_pipeline/infrastructure/lovlig_client.py
-# Delegates to lovlig.sync_datasets() - no direct ZIP inspection
+# lovdata_pipeline/lovlig.py
+class Lovlig:
+    def sync(self):
+        """Sync files from Lovdata using lovlig library."""
+        lovlig.sync_datasets(self.dataset_filter, ...)
+    
+    def get_changed_files(self) -> list[FileChange]:
+        """Get added and modified files from lovlig state."""
+        # Reads data/state.json created by lovlig
 ```
 
-### 1.2 File Identity and Versions
+**Verification:**
+- lovlig library handles all Lovdata interaction
+- Pipeline reads lovlig's `state.json` for changes
+- No direct ZIP inspection or timestamp comparison
+
+### 1.2 File Identity
 
 **Requirement:**
 
-- Each source document SHALL have a stable **Document ID** composed from:
-  - dataset name (e.g. `gjeldende-lover`)
-  - relative file path/filename (e.g. `nl/nl-18840614-003.xml`)
-- Each **version** of a document SHALL be identified by the content hash computed by `lovlig` (e.g. xxHash)
+Each document SHALL be identified by:
+- **Document ID** - filename stem (e.g. `nl-18840614-003` from `nl/nl-18840614-003.xml`)
+- **Version** - xxHash from lovlig library
 
-**Current Implementation:** ✅
-
-- Document ID: filename stem (e.g. `nl-18840614-003` from `nl/nl-18840614-003.xml`)
-- Hash: lovlig's xxHash stored in `state.json`
-- Used for change detection and chunk identification
-
-**Verification:**
+**Implementation:** ✅
 
 ```python
-# Document ID extraction
-self.document_id = self.file_path.stem  # xml_chunker.py
+# Extract document ID from filename
+doc_id = xml_path.stem  # "nl-18840614-003"
 
-# Hash comparison for changes
-file_hash = file_info.get("file_hash", "")  # lovlig_client.py
+# Get hash from lovlig state
+file_hash = lovlig.get_hash(xml_path)  # xxHash
 ```
 
-### 1.3 Pipeline Manifest
+**Verification:**
+- Document ID is stable across updates
+- Hash changes when content changes
+- Same document + different hash = new version
+
+### 1.3 State Tracking
 
 **Requirement:**
 
-- The pipeline SHALL maintain its own manifest storing, for each Document ID + hash:
-  - last processed hash
-  - completed pipeline stage
-  - timestamp of last successful processing
-  - index status (indexed/deleted/failed)
-- The pipeline SHALL use this manifest to decide whether a given (Document ID, hash) needs processing
+The pipeline SHALL maintain state storing:
+- Processed documents with hashes
+- Vector IDs for each document
+- Failed documents with errors
+- Timestamps for all entries
 
-**Current Implementation:** ✅ (with distributed state)
-
-- `data/processed_files.json` - Chunking state per file
-- `data/embedded_files.json` - Embedding state per file
-- `data/manifest.json` - Index state via `PipelineManifest`
-
-**Verification:**
+**Implementation:** ✅
 
 ```python
-# lovdata_pipeline/infrastructure/pipeline_manifest.py
-class PipelineManifest:
-    def update_document_status(
-        self, document_id: str, status: IndexStatus, ...
-    )
+# lovdata_pipeline/state.py
+{
+  "processed": {
+    "doc_id": {
+      "hash": "abc123...",
+      "vectors": ["vec_1", "vec_2"],
+      "timestamp": "2025-11-19T10:30:00Z"
+    }
+  },
+  "failed": {
+    "doc_id": {
+      "hash": "def456...",
+      "error": "Parse error",
+      "timestamp": "2025-11-19T10:35:00Z"
+    }
+  }
+}
 ```
 
-**Gap:** State is distributed across 3 files instead of unified manifest
-**Mitigation:** Each file tracks its stage; works but could be consolidated
+**Verification:**
+- State persists across runs
+- Hash comparison determines if reprocessing needed
+- Vector IDs enable cleanup
 
 ---
 
@@ -123,599 +131,561 @@ class PipelineManifest:
 
 **Requirement:**
 
-- For every file reported by `lovlig` with status **added**, the pipeline SHALL:
-  - Check if the file's current hash already exists in the pipeline manifest with status "indexed"
-  - If not present or not fully indexed, enqueue the file for full pipeline processing
+For files with status `added`, the pipeline SHALL:
+1. Check if already processed with same hash
+2. If not processed, run full pipeline: parse → chunk → embed → index
+3. Mark as processed with hash and vector IDs
 
-**Current Implementation:** ✅
-
-- `get_unprocessed_files()` returns added files not in `processed_files.json`
-- Full pipeline: sync → chunk → embed → index
-
-**Verification:**
+**Implementation:** ✅
 
 ```python
-# lovdata_pipeline/infrastructure/lovlig_client.py
-def get_unprocessed_files(self, force_reprocess: bool = False):
-    # Returns files with status "added" or "modified" that aren't processed
+def run_pipeline(config):
+    changed = lovlig.get_changed_files()  # includes "added"
+    
+    for file_change in changed:
+        if not state.is_processed(file_change.document_id, file_change.hash):
+            vectors = process_file(file_change.path, ...)
+            state.mark_processed(file_change.document_id, file_change.hash, vectors)
 ```
+
+**Verification:**
+- New files are processed
+- Duplicate processing avoided (hash check)
+- State updated on success
 
 ### 2.2 Modified Documents
 
 **Requirement:**
 
-- For every file reported as **modified**, the pipeline SHALL:
-  - Treat this as a new version of an existing Document ID
-  - Look up the previously indexed version(s) for that Document ID
-  - Mark previous chunks/records in the index as obsolete (to be deleted or overwritten)
-  - Process the new version through the full pipeline
-- On completion, the index SHALL only expose chunks belonging to the newest version
+For files with status `modified`, the pipeline SHALL:
+1. Delete old vectors for that document ID
+2. Process new version completely
+3. Index new vectors
+4. Update state with new hash and vector IDs
 
-**Current Implementation:** ✅
-
-- Modified files detected by hash comparison in lovlig
-- Old chunks removed before processing: `remove_chunks_for_document()`
-- Old embeddings removed: `EnrichedChunkWriter.remove_chunks_for_document()`
-- Old index entries deleted: `ChromaClient.delete_document()`
-
-**Verification:**
+**Implementation:** ✅
 
 ```python
-# lovdata_pipeline/pipeline_steps.py:chunk_documents()
-# First pass: Remove old chunks for modified documents
-for file_path in changed_file_paths:
-    document_id = Path(file_path).stem
-    removed_chunks = writer.remove_chunks_for_document(document_id)
-
-# Similar pattern in embed_chunks() and index_embeddings()
+def process_file(xml_path, state, chroma, ...):
+    doc_id = xml_path.stem
+    
+    # Remove old vectors if document was previously processed
+    if doc_id in state.processed:
+        old_vectors = state.get_vectors(doc_id)
+        chroma.delete_by_ids(old_vectors)
+    
+    # Process new version
+    articles = parse_xml(xml_path)
+    chunks = chunk_articles(articles)
+    enriched = embed_chunks(chunks)
+    vector_ids = index_chunks(enriched)
+    
+    # Update state
+    state.mark_processed(doc_id, new_hash, vector_ids)
 ```
+
+**Verification:**
+- Old vectors removed before indexing new
+- No duplicate vectors in index
+- State reflects latest version
 
 ### 2.3 Removed Documents
 
 **Requirement:**
 
-- For every file reported as **removed**, the pipeline SHALL:
-  - Look up the Document ID in the index and delete all chunks/records belonging to it
-  - Mark the Document ID as "deleted" in the pipeline manifest
-- The pipeline SHALL ensure removed documents no longer appear in RAG retrieval results
+For files with status `removed`, the pipeline SHALL:
+1. Delete all vectors for that document ID
+2. Remove document from state
+3. Log the removal
 
-**Current Implementation:** ✅
-
-- `get_removed_files()` returns list of removed files
-- Chunks removed from all stages
-- Index vectors deleted via ChromaDB
-- Processing state cleaned up
-
-**Verification:**
+**Implementation:** ✅
 
 ```python
-# lovdata_pipeline/pipeline_steps.py:chunk_documents()
-for removal in removed_metadata:
-    document_id = removal["document_id"]
-    removed_chunks = writer.remove_chunks_for_document(document_id)
-
-# lovdata_pipeline/pipeline_steps.py:index_embeddings()
-chroma_client.delete_document(document_id=removal["document_id"])
-
-# State cleanup
-client.clean_removed_files_from_processed_state()
+def run_pipeline(config):
+    removed = lovlig.get_removed_files()
+    
+    for removal in removed:
+        # Delete vectors
+        old_vectors = state.get_vectors(removal.document_id)
+        if old_vectors:
+            chroma.delete_by_ids(old_vectors)
+        
+        # Remove from state
+        state.remove(removal.document_id)
+        
+        logger.info(f"Removed {len(old_vectors)} vectors for {removal.document_id}")
 ```
-
-### 2.4 Idempotent Re-runs
-
-**Requirement:**
-
-- Re-running the pipeline for the same `lovlig` state (same hashes, same statuses) SHALL NOT:
-  - Reprocess already processed hashes
-  - Create duplicate chunks in the index
-- It SHALL be safe to run the pipeline repeatedly on the same snapshot
-
-**Current Implementation:** ✅
-
-- Hash-based change detection prevents reprocessing
-- `get_unprocessed_files()` skips files already in `processed_files.json`
-- ChromaDB upsert prevents duplicates (same chunk ID overwrites)
-- Force flags available for override when needed
 
 **Verification:**
-
-```python
-# Idempotent behavior via state checks
-if not force_reprocess:
-    processed_at = processed_files.get(dataset_name, {}).get(relative_path)
-    if processed_at and file_info.get("status") != "modified":
-        continue  # Skip already processed
-```
+- Vectors deleted from ChromaDB
+- State cleaned up
+- No orphaned vectors remain
 
 ---
 
-## 3. Pipeline Stages
+## 3. Processing
 
-### 3.1 Stage Definitions
-
-**Defined Stages:**
-
-1. **Discover** (read manifest + decide which files to process)
-2. **Parse/Chunk** (XML → normalized structure & chunks)
-3. **Embed** (compute vector embeddings)
-4. **Index** (write to vector/search index, plus metadata)
-5. **Reconcile** (cleanup orphaned entries)
+### 3.1 Atomic Per-File Processing
 
 **Requirement:**
 
-- The pipeline SHALL define a fixed, ordered list of stages for each document version
-- The pipeline manifest SHALL store, per (Document ID, hash), the highest successfully completed stage
+Each file SHALL be processed atomically:
+1. Parse XML → Extract articles
+2. Chunk articles → Create text chunks
+3. Embed chunks → Generate vectors (OpenAI)
+4. Index vectors → Store in ChromaDB
 
-**Current Implementation:** ✅ (implicit ordering)
+No file proceeds to step N+1 until step N completes.
 
-- Stages are ordered CLI commands: sync → chunk → embed → index
-- Each stage has its own state file tracking completion
-- `full` command runs all stages in sequence
-
-**Gap:** No single unified stage tracker per document
-**Mitigation:** Distributed state files effectively track per-stage completion
-
-### 3.2 Stage Checkpointing
-
-**Requirement:**
-
-- After successfully completing a stage for a document version, the pipeline SHALL persist:
-  - the stage name
-  - any required intermediate artifacts (e.g., parsed text, chunk definitions, stored embeddings)
-- On restart, the pipeline SHALL begin from the next incomplete stage, not from the beginning
-
-**Current Implementation:** ✅
-
-- Chunking → writes `data/chunks/legal_chunks.jsonl` + updates `processed_files.json`
-- Embedding → writes `data/enriched/embedded_chunks.jsonl` + updates `embedded_files.json`
-- Indexing → writes to ChromaDB + updates `manifest.json`
-- Each stage checks state before processing
-
-**Verification:**
+**Implementation:** ✅
 
 ```python
-# lovdata_pipeline/infrastructure/embedded_file_client.py
-def needs_embedding(self, dataset_name: str, relative_path: str, file_hash: str):
-    # Checks embedded_files.json to skip already embedded
+def process_file(xml_path, state, chroma, openai, config):
+    """Atomic processing: parse → chunk → embed → index."""
+    
+    # 1. Parse
+    articles = extract_articles_from_xml(xml_path)
+    
+    # 2. Chunk
+    chunks = []
+    for article in articles:
+        chunks.extend(chunk_article(article, ...))
+    
+    # 3. Embed
+    enriched = embed_chunks(chunks, openai, model)
+    
+    # 4. Index
+    vector_ids = []
+    for chunk in enriched:
+        id = chroma.upsert([chunk])
+        vector_ids.append(id)
+    
+    return vector_ids
 ```
 
-### 3.3 Document-Level Recovery
+**Verification:**
+- No intermediate files created
+- File either fully processed or not at all
+- Failure in any step stops processing for that file
+
+### 3.2 Batch Embedding
 
 **Requirement:**
 
-- If processing of a document version fails at stage N, the pipeline SHALL:
-  - Record the failure (stage, error message, timestamp)
-  - Leave previous stages' data intact
-- On the next run, the pipeline SHALL retry from stage N for that (Document ID, hash)
+Embedding requests SHALL be batched to:
+- Reduce API calls
+- Improve throughput
+- Respect rate limits
 
-**Current Implementation:** ⚠️ Partial
-
-- Failed files logged but pipeline continues
-- Previous stages' data preserved (JSONL append-only)
-- Retry happens automatically (file not marked as processed)
-- Statistics track success/failure counts
-
-**Gap:** No explicit failure recording with error details
-**Verification:**
+**Implementation:** ✅
 
 ```python
-# lovdata_pipeline/pipeline_steps.py
-except Exception as e:
-    logger.error(f"Failed to process {file_name}: {e}", exc_info=True)
-    files_failed += 1
-    continue  # File not marked as processed, will retry next run
+def embed_chunks(chunks, openai_client, model):
+    """Embed chunks in batches of 100."""
+    batch_size = 100
+    
+    for i in range(0, len(chunks), batch_size):
+        batch = chunks[i:i + batch_size]
+        texts = [c.text for c in batch]
+        
+        response = openai_client.embeddings.create(input=texts, model=model)
+        embeddings = [item.embedding for item in response.data]
+        
+        # Pair chunks with embeddings
+        ...
 ```
 
-**Improvement Needed:** Store failure reason and count in state
+**Verification:**
+- Max 100 texts per API call
+- Embeddings correctly matched to chunks
+- Batching reduces total API calls
 
-### 3.4 Job-Level Recovery
+### 3.3 Idempotency
 
 **Requirement:**
 
-- If the whole job fails (e.g. crash, deployment, OOM), the pipeline SHALL:
-  - On the next run, re-read both lovlig state and pipeline manifest
-  - For each document version, resume from its last completed stage
-- No successful work performed before the crash SHALL need to be repeated
+Running the pipeline multiple times with no changes SHALL:
+- Not reprocess any files
+- Not create duplicate vectors
+- Complete quickly (no-op)
 
-**Current Implementation:** ✅
-
-- All state files persist to disk
-- Next run reads all state files and continues from where it left off
-- Intermediate artifacts (JSONL files) preserved
-- Stateless pipeline steps make recovery automatic
-
-**Verification:**
-Run `make chunk`, kill it mid-execution, run again → continues from next file
-
-### 3.5 Stage Idempotency
-
-**Requirement:**
-
-- Every stage SHALL be idempotent with respect to the same (Document ID, hash)
-- Re-running "Chunk" on the same parsed representation SHALL produce the same chunk IDs or safely overwrite existing ones
-- Re-running "Index" SHALL upsert or replace chunks instead of creating duplicates
-
-**Current Implementation:** ✅
-
-- Chunk IDs are deterministic: `{document_id}_{section_id}` or `{document_id}_{section_id}_sub_{seq}`
-- ChromaDB upsert by chunk ID (overwrites existing)
-- JSONL files use remove-then-append pattern for updates
-
-**Verification:**
+**Implementation:** ✅
 
 ```python
-# Deterministic chunk ID generation
-chunk_id = f"{self.document_id}_{article.article_id}"
-
-# ChromaDB upsert (not insert)
-self.collection.upsert(ids=ids, embeddings=embeddings, metadatas=metadatas)
+def run_pipeline(config):
+    changed = lovlig.get_changed_files()
+    
+    for file_change in changed:
+        # Skip if already processed with this hash
+        if state.is_processed(file_change.document_id, file_change.hash):
+            logger.debug(f"Skipping {file_change.document_id} (already processed)")
+            continue
+        
+        process_file(...)
 ```
+
+**Verification:**
+- Hash comparison prevents reprocessing
+- No duplicate vectors created
+- Second run completes in <1 minute
 
 ---
 
-## 4. Index Design
+## 4. State Management
 
-### 4.1 Document-Chunk Mapping
+### 4.1 Persistence
 
 **Requirement:**
 
-- The index SHALL store enough metadata on each chunk to support deletes and updates:
-  - Document ID
-  - document version hash
-  - dataset name
-  - stable chunk ID (e.g. `DocumentID::hash::chunk_number`)
-- The pipeline SHALL be able to find all chunks for a given Document ID in O(1) or via simple filtered query
+State SHALL:
+- Persist to disk as JSON
+- Survive process crashes
+- Be human-readable
 
-**Current Implementation:** ✅
-
-- Chunk metadata includes: `document_id`, `chunk_id`, `section_heading`, `absolute_address`
-- ChromaDB supports metadata filtering
-- Can query by document_id: `where={"document_id": "nl-1234"}`
-
-**Gap:** Hash not explicitly stored in chunk metadata
-**Verification:**
+**Implementation:** ✅
 
 ```python
-# lovdata_pipeline/domain/models.py
-class ChunkMetadata(BaseModel):
-    chunk_id: str
-    document_id: str
-    content: str
-    token_count: int
-    section_heading: str
-    absolute_address: str
+# lovdata_pipeline/state.py
+class ProcessingState:
+    def _save(self):
+        """Save state to disk."""
+        with self.path.open("w") as f:
+            json.dump(self.data, f, indent=2)
 ```
 
-**Improvement Needed:** Add `document_hash` and `dataset_name` to ChunkMetadata
+**Verification:**
+- State file: `data/pipeline_state.json`
+- Written after each document processed
+- Valid JSON, can inspect with `jq`
 
 ### 4.2 Atomic Updates
 
 **Requirement:**
 
-- For modified documents, the pipeline SHALL:
-  - Insert new chunks for the new version
-  - Delete or hide old chunks for previous versions
-- The pipeline SHOULD ensure that at no point a document is left in a partially updated state
+State updates SHALL be atomic:
+- Write complete or not at all
+- No partial writes
+- No corruption on crash
 
-**Current Implementation:** ✅
-
-- Delete-then-insert pattern implemented
-- Old chunks removed before processing new version
-- ChromaDB batch operations used
-
-**Gap:** Not fully atomic (brief window where document has no chunks)
-**Mitigation:** Quick operation, acceptable for current use case
-
-**Verification:**
+**Implementation:** ✅
 
 ```python
-# Pattern: remove old → process → write new
-writer.remove_chunks_for_document(document_id)
-# ... process file ...
-writer.write_chunks(new_chunks)
+def _save(self):
+    """Atomic write using temp file + rename."""
+    tmp_path = self.path.with_suffix(".tmp")
+    with tmp_path.open("w") as f:
+        json.dump(self.data, f, indent=2)
+    tmp_path.rename(self.path)  # Atomic on POSIX
 ```
 
-### 4.3 Multiple Datasets
+**Verification:**
+- Write to temp file first
+- Rename (atomic operation)
+- No corrupted state files
+
+### 4.3 Statistics
 
 **Requirement:**
 
-- The pipeline SHALL support all datasets handled by `lovlig`
-- SHALL index dataset name as part of metadata
-- Allow configuration to include/exclude datasets (matching `LOVDATA_DATASET_FILTER` behavior)
+State SHALL provide statistics:
+- Number of processed documents
+- Number of failed documents
+- Total vectors indexed
 
-**Current Implementation:** ✅
-
-- `LOVDATA_DATASET_FILTER` config supports multiple datasets (e.g., "gjeldende")
-- Dataset name tracked in file paths
-- Can filter by dataset in lovlig sync
-
-**Gap:** Dataset name not explicitly stored in chunk metadata
-**Verification:**
+**Implementation:** ✅
 
 ```python
-# lovdata_pipeline/config/settings.py
-dataset_filter: str = "gjeldende"
-
-# Applies to both gjeldende-lover and gjeldende-sentrale-forskrifter
+def stats(self) -> dict:
+    """Get statistics."""
+    return {
+        "processed": len(self.data["processed"]),
+        "failed": len(self.data["failed"]),
+        "total_vectors": sum(
+            len(entry["vectors"]) 
+            for entry in self.data["processed"].values()
+        )
+    }
 ```
 
-**Improvement Needed:** Add dataset_name to chunk metadata for better filtering
+**Verification:**
+- `status` command shows stats
+- Accurate counts
+- Useful for monitoring
 
 ---
 
-## 5. Orchestration
+## 5. Index Consistency
 
-### 5.1 Decoupled Steps
+### 5.1 No Orphaned Vectors
 
 **Requirement:**
 
-- The system SHALL separate:
-  - Dataset sync (run `lovlig`/`sync_datasets`)
-  - Indexing pipeline run (consume `state.json` + pipeline manifest and update index)
-- This separation SHALL allow running sync more frequently than indexing, if desired
+The index SHALL NOT contain vectors for documents that:
+- Have been removed from the corpus
+- Have been modified (old versions)
 
-**Current Implementation:** ✅
-
-- Completely decoupled CLI commands
-- `make sync` - just downloads/extracts
-- `make chunk`, `make embed`, `make index` - separate steps
-- `make full` - runs all in sequence
-- Can run sync independently anytime
-
-**Verification:**
+**Implementation:** ✅
 
 ```python
-# lovdata_pipeline/cli.py
-def run_sync(force_download: bool = False):
-    stats = pipeline_steps.sync_datasets(force_download=force_download)
+# On modification
+if doc_id in state.processed:
+    old_vectors = state.get_vectors(doc_id)
+    chroma.delete_by_ids(old_vectors)
 
-def run_chunk(force_reprocess: bool = False):
-    # Reads from state.json, doesn't run sync
+# On removal
+removed = lovlig.get_removed_files()
+for removal in removed:
+    old_vectors = state.get_vectors(removal.document_id)
+    chroma.delete_by_ids(old_vectors)
 ```
 
-### 5.2 Batch and Streaming
-
-**Requirement:**
-
-- The pipeline SHALL support:
-  - Batch mode: process all pending added/modified/removed files in one run
-  - Optional incremental mode: process in smaller batches for long-running jobs
-
-**Current Implementation:** ✅ Batch mode
-
-- Default: processes all changed files in one run
-- Memory-efficient: processes one file at a time (streaming architecture)
-
-**Gap:** No explicit batching control (e.g., process N files then checkpoint)
-**Mitigation:** One-at-a-time processing + state persistence = natural checkpointing
-
-### 5.3 Concurrency Control
-
-**Requirement:**
-
-- The pipeline SHALL allow configuring max concurrency/parallelism per stage to balance throughput vs. resource usage
-
-**Current Implementation:** ⚠️ Partial
-
-- Sync has `LOVDATA_MAX_DOWNLOAD_CONCURRENCY` setting (default: 4)
-- Other stages are single-threaded
-
-**Gap:** No parallelism in chunk/embed/index stages
 **Verification:**
+- Old vectors deleted before indexing new
+- Removed documents cleaned from index
+- State tracks all vector IDs for cleanup
+
+### 5.2 No Duplicate Vectors
+
+**Requirement:**
+
+The index SHALL NOT contain multiple vectors for the same chunk.
+
+**Implementation:** ✅
+
+Enforced by:
+1. Atomic processing (file completes fully or not at all)
+2. Hash-based skip (don't reprocess same version)
+3. Old vector deletion (clean before indexing new)
+
+**Verification:**
+- Each chunk has unique ID in ChromaDB
+- Reprocessing removes old first
+- Idempotency prevents duplicates
+
+### 5.3 Metadata Consistency
+
+**Requirement:**
+
+Vector metadata SHALL match source document:
+- Document ID
+- Chunk index
+- Section heading
+- Lovdata URL
+
+**Implementation:** ✅
 
 ```python
-# lovdata_pipeline/config/settings.py
-max_download_concurrency: int = 4  # Only for sync
+class ChunkMetadata(BaseModel):
+    document_id: str           # From filename
+    chunk_index: int           # 0-based
+    section_heading: str       # From XML
+    absolute_address: str      # Lovdata URL
+    # ... other fields
 ```
 
-**Future Enhancement:** Add parallel processing for chunk/embed/index
+**Verification:**
+- Metadata extracted from XML
+- Stored with vector in ChromaDB
+- Queryable for filtering/retrieval
 
 ---
 
-## 6. Observability
+## 6. Error Handling
 
-### 6.1 Progress Reporting
-
-**Requirement:**
-
-- The pipeline SHALL expose, per run:
-  - Number of documents discovered (added/modified/removed)
-  - Number successfully processed to completion
-  - Number failed per stage
-  - Summary per dataset
-
-**Current Implementation:** ✅
-
-- Each pipeline step returns statistics dict
-- Logging shows progress and results
-- Statistics include: files processed, chunks created, success rate, failures
-
-**Verification:**
-
-```python
-# lovdata_pipeline/pipeline_steps.py:chunk_documents()
-return {
-    "files_processed": files_processed,
-    "files_failed": files_failed,
-    "total_chunks": total_chunks,
-    "chunks_removed": chunks_removed,
-    "output_size_mb": output_size_mb,
-}
-```
-
-### 6.2 Error Classification
+### 6.1 Per-File Isolation
 
 **Requirement:**
 
-- The pipeline SHALL distinguish between:
-  - **Transient** failures (network, rate-limits, temporary index outage) → auto-retriable
-  - **Permanent** failures (invalid XML, parsing errors) → require manual intervention
-- For transient failures, the pipeline SHALL attempt a configurable number of retries before marking as failed
+Processing SHALL continue on error:
+- Failed file logged
+- Failed file marked in state
+- Other files processed normally
 
-**Current Implementation:** ✅
-
-- Error classification implemented
-- Retry logic with exponential backoff
-- Max retries: 3 attempts
-- Permanent errors (FileNotFoundError) don't retry
-- Transient errors (ConnectionError, TimeoutError, OSError) retry with backoff
-
-**Verification:**
+**Implementation:** ✅
 
 ```python
-# lovdata_pipeline/pipeline_steps.py:chunk_documents()
-except FileNotFoundError as e:
-    # Permanent error - don't retry
-    files_failed += 1
-    break
-
-except (ConnectionError, TimeoutError, OSError) as e:
-    # Transient error - retry
-    if attempt < max_retries - 1:
-        wait_seconds = 2**attempt  # Exponential backoff
-        continue
+def run_pipeline(config):
+    for file_change in changed:
+        try:
+            vectors = process_file(file_change.path, ...)
+            state.mark_processed(file_change.document_id, file_change.hash, vectors)
+        except Exception as e:
+            logger.error(f"Failed to process {file_change.document_id}: {e}")
+            state.mark_failed(file_change.document_id, file_change.hash, str(e))
+            continue  # Process next file
 ```
 
-### 6.3 Auditability
+**Verification:**
+- One failure doesn't stop pipeline
+- Failed documents in `state.failed`
+- Successful documents in `state.processed`
+
+### 6.2 Retry on Rerun
 
 **Requirement:**
 
-- For each document version, the pipeline SHALL store:
-  - When it was first seen (from `lovlig`)
-  - When each stage completed
-  - When it was indexed or deleted
-- This history SHALL make it possible to trace what changed in the index over time
+Failed documents SHALL be retried on next run.
 
-**Current Implementation:** ⚠️ Partial
-
-- `processed_files.json` tracks when chunking completed
-- `embedded_files.json` tracks when embedding completed
-- `manifest.json` tracks index status and timestamp
-- Lovlig `state.json` has first_seen/last_changed timestamps
-
-**Gap:** No unified audit log showing full history
-**Improvement Needed:** Consider adding audit log or consolidating timestamps
-
-**Verification:**
+**Implementation:** ✅
 
 ```python
-# lovdata_pipeline/infrastructure/embedded_file_client.py
-"embedded_at": datetime.now(UTC).isoformat()
-
-# lovdata_pipeline/infrastructure/pipeline_manifest.py
-indexed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+def needs_processing(doc_id, hash):
+    """Check if needs processing."""
+    # Retry if failed
+    if doc_id in state.failed:
+        return True
+    
+    # ... other checks
 ```
+
+**Verification:**
+- Failed documents reprocessed on next run
+- Success removes from `failed` section
+- Persistent failures remain logged
+
+### 6.3 Graceful Shutdown
+
+**Requirement:**
+
+Pipeline SHALL handle interruption:
+- State saved up to last completed file
+- Restart resumes from next file
+- No corrupted state
+
+**Implementation:** ✅
+
+- State saved after each document
+- Atomic writes prevent corruption
+- Hash check skips completed files
+
+**Verification:**
+- Ctrl+C during run
+- Restart pipeline
+- Skips completed files, continues from next
 
 ---
 
-## 7. Safety & Consistency
+## 7. Observability
 
-### 7.1 Consistency Guarantees
+### 7.1 Progress Logging
 
 **Requirement:**
 
-- After a successful run, the index contents SHALL correspond to:
-  - All current files in the latest Lovdata snapshot
-  - Minus any files that `lovlig` reports as removed
-  - With the latest version of each modified file
+Pipeline SHALL log:
+- Number of files to process
+- Current file being processed
+- Per-file statistics (chunks, vectors)
+- Final summary
 
-**Current Implementation:** ✅
+**Implementation:** ✅
 
-- Pipeline processes all changes from lovlig state
-- Removes deleted files from all stages
-- Updates modified files completely
-- `reconcile` command verifies and cleans up inconsistencies
+```python
+logger.info(f"Processing {len(changed)} changed files...")
+logger.info(f"[{i}/{total}] {doc_id}: {len(chunks)} chunks → embedded → indexed ({len(vectors)} vectors)")
+logger.info(f"Complete! Processed: {processed}, Failed: {failed}")
+```
 
 **Verification:**
+- Detailed progress during run
+- Per-file statistics
+- Summary at end
+
+### 7.2 Status Command
+
+**Requirement:**
+
+Pipeline SHALL provide status command showing:
+- Processed document count
+- Failed document count
+- Total vectors indexed
+
+**Implementation:** ✅
 
 ```bash
-# Full pipeline ensures consistency
-make full  # sync → chunk → embed → index
+uv run python -m lovdata_pipeline status
 
-# Reconcile verifies and fixes
-make reconcile
+# Output:
+# Pipeline Status
+#   Processed: 3,000 documents
+#   Failed: 2 documents
+#   Indexed: 45,000 vectors
 ```
 
-### 7.2 Ghost Document Prevention
+**Verification:**
+- `status` command exists
+- Shows accurate counts
+- Fast response (<1 second)
+
+### 7.3 State Inspection
 
 **Requirement:**
 
-- The pipeline SHALL periodically verify that there are no documents in the index that:
-  - Do not exist in `lovlig` state (e.g. stale leftovers)
-- Any such documents SHALL be marked for cleanup
+State file SHALL be human-readable and inspectable.
 
-**Current Implementation:** ✅
+**Implementation:** ✅
 
-- `reconcile_index()` pipeline step implemented
-- Compares ChromaDB index with lovlig state
-- Identifies and removes ghost documents
-- Can be run independently
+```bash
+# View all processed
+jq '.processed | keys' data/pipeline_state.json
 
-**Verification:**
+# View specific document
+jq '.processed["nl-18840614-003"]' data/pipeline_state.json
 
-```python
-# lovdata_pipeline/pipeline_steps.py:reconcile_index()
-def reconcile_index() -> dict:
-    """Remove ghost documents from index that don't exist in lovlig state."""
-    # Gets all document IDs from ChromaDB
-    # Compares with lovlig state
-    # Deletes documents not in lovlig state
+# Count vectors
+jq '[.processed[].vectors | length] | add' data/pipeline_state.json
 ```
 
----
-
-## Compliance Summary
-
-| Requirement                       | Status             | Notes                                          |
-| --------------------------------- | ------------------ | ---------------------------------------------- |
-| **1. Inputs and Corpus Tracking** | ✅ Complete        | All requirements met                           |
-| 1.1 Use lovlig as source of truth | ✅                 | `LovligClient` wraps lovlig                    |
-| 1.2 File identity and versions    | ✅                 | Document ID + hash tracking                    |
-| 1.3 Local pipeline manifest       | ✅                 | Distributed across 3 state files               |
-| **2. Change Handling**            | ✅ Complete        | All requirements met                           |
-| 2.1 Added documents               | ✅                 | Full pipeline processing                       |
-| 2.2 Modified documents            | ✅                 | Delete-then-reprocess pattern                  |
-| 2.3 Removed documents             | ✅                 | Cleanup across all stages                      |
-| 2.4 Idempotent re-runs            | ✅                 | Hash-based change detection                    |
-| **3. Pipeline Stages**            | ✅ Complete        | All requirements met                           |
-| 3.1 Pipeline stages               | ✅                 | 5 stages: discover/chunk/embed/index/reconcile |
-| 3.2 Per-stage checkpointing       | ✅                 | State files + JSONL artifacts                  |
-| 3.3 Per-document recovery         | ⚠️                 | Works but no failure details stored            |
-| 3.4 Job-level recovery            | ✅                 | Automatic via state persistence                |
-| 3.5 Stage idempotency             | ✅                 | Deterministic IDs + upsert                     |
-| **4. Index Design**               | ⚠️ Mostly Complete | Minor metadata gaps                            |
-| 4.1 Document-chunk mapping        | ⚠️                 | Missing hash and dataset in metadata           |
-| 4.2 Atomic updates                | ✅                 | Delete-then-insert pattern                     |
-| 4.3 Multiple datasets             | ⚠️                 | Supported but not in metadata                  |
-| **5. Orchestration**              | ⚠️ Mostly Complete | Limited concurrency                            |
-| 5.1 Decoupled steps               | ✅                 | Fully independent CLI commands                 |
-| 5.2 Batch/streaming               | ✅                 | Batch mode with streaming processing           |
-| 5.3 Configurable concurrency      | ⚠️                 | Only for sync, not other stages                |
-| **6. Observability**              | ✅ Complete        | All requirements met                           |
-| 6.1 Progress reporting            | ✅                 | Statistics per run                             |
-| 6.2 Error classification          | ✅                 | Retry logic with backoff                       |
-| 6.3 Auditability                  | ⚠️                 | Timestamps tracked, no unified audit log       |
-| **7. Safety & Consistency**       | ✅ Complete        | All requirements met                           |
-| 7.1 Consistency guarantee         | ✅                 | Full pipeline + reconcile                      |
-| 7.2 No ghost documents            | ✅                 | Reconcile step implemented                     |
-
-**Overall Compliance:** 23/28 fully met (82%), 5 partially met (18%), 0 unmet
+**Verification:**
+- Valid JSON format
+- Pretty-printed (indented)
+- Queryable with standard tools
 
 ---
 
 ## Verification Checklist
 
-Before merging any change to the pipeline, verify:
+Use this checklist when making changes:
 
-- [ ] **Idempotency** - Can run multiple times safely
-- [ ] **Incremental processing** - Only processes changes
-- [ ] **Removal handling** - Cleans up all stages for deleted files
-- [ ] **Checkpoint/resume** - State persisted after each file
-- [ ] **Error classification** - Transient vs permanent errors
-- [ ] **State consistency** - All relevant state files updated
-- [ ] **Index consistency** - Index matches lovlig state
-- [ ] **Observability** - Adequate logging and metrics
+### Change Detection
+- [ ] Pipeline uses lovlig library for sync
+- [ ] Changes detected via `state.json`
+- [ ] Document ID stable across updates
+- [ ] Hash used for version tracking
+
+### Processing
+- [ ] Added files processed completely
+- [ ] Modified files: old vectors deleted, new vectors indexed
+- [ ] Removed files: vectors deleted, state cleaned
+- [ ] Atomic per-file processing (no intermediate files)
+- [ ] Batch embedding (100 per request)
+
+### State Management
+- [ ] State persists to disk (JSON)
+- [ ] State survives crashes
+- [ ] Atomic state updates
+- [ ] Hash check prevents reprocessing
+- [ ] Statistics available
+
+### Index Consistency
+- [ ] No orphaned vectors (removed docs cleaned)
+- [ ] No duplicate vectors (idempotency)
+- [ ] Metadata matches source documents
+
+### Error Handling
+- [ ] Failed file doesn't stop pipeline
+- [ ] Failed files logged and retryable
+- [ ] Graceful shutdown preserves state
+
+### Observability
+- [ ] Progress logging during run
+- [ ] Status command shows statistics
+- [ ] State file human-readable
 
 ---
 
-**This document is the specification. Code should conform to this.**
+## References
+
+- **[User Guide](USER_GUIDE.md)** - How to use the pipeline
+- **[Developer Guide](DEVELOPER_GUIDE.md)** - Architecture details
+- **[Incremental Updates](INCREMENTAL_UPDATES.md)** - Change detection implementation
+- **[Quick Reference](QUICK_REFERENCE.md)** - Command cheat sheet

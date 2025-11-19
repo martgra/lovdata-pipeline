@@ -1,16 +1,11 @@
-"""ChromaDB client for vector storage and retrieval.
+"""ChromaDB client for vector storage.
 
-This client provides a ChromaDB implementation of the VectorDBClient interface.
-Supports three deployment modes:
-- memory: In-memory ephemeral storage
-- persistent: Local disk storage
-- client: Remote server connection
+Simple wrapper around ChromaDB with no abstract base class.
 """
 
 from typing import Any
 
 from lovdata_pipeline.domain.models import EnrichedChunk
-from lovdata_pipeline.infrastructure.vector_db_client import VectorDBClient
 
 try:
     import chromadb
@@ -20,7 +15,7 @@ except ImportError:
     CHROMADB_AVAILABLE = False
 
 
-class ChromaClient(VectorDBClient):
+class ChromaClient:
     """Client for interacting with ChromaDB vector database.
 
     This client handles:
