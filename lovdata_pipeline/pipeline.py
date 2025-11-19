@@ -13,6 +13,7 @@ from openai import OpenAI
 
 from lovdata_pipeline.domain.models import ChunkMetadata, EnrichedChunk
 from lovdata_pipeline.domain.splitters.recursive_splitter import XMLAwareRecursiveSplitter
+from lovdata_pipeline.progress import ProgressTracker, NoOpProgressTracker
 
 logger = logging.getLogger(__name__)
 
@@ -80,13 +81,20 @@ def chunk_article(article: dict, doc_id: str, dataset: str, max_tokens: int) -> 
 
 
 def embed_chunks(
-    chunks: list[ChunkMetadata], openai_client: OpenAI, model: str
+    chunks: list[ChunkMetadata],
+    openai_client: OpenAI,
+    model: str,
+    progress_tracker: ProgressTracker,
 ) -> list[EnrichedChunk]:
     """Embed chunks in batches of 100."""
     from datetime import UTC, datetime
 
     all_enriched = []
     batch_size = 100
+    total_chunks = len(chunks)
+
+    # Start tracking embedding progress
+    progress_tracker.start_embedding(total_chunks)
 
     for i in range(0, len(chunks), batch_size):
         batch = chunks[i : i + batch_size]
@@ -114,6 +122,12 @@ def embed_chunks(
             )
             all_enriched.append(enriched)
 
+        # Update progress after each batch
+        progress_tracker.update_embedding(len(all_enriched), total_chunks)
+
+    # End embedding progress
+    progress_tracker.end_embedding()
+
     return all_enriched
 
 
@@ -122,6 +136,7 @@ def process_file(
     chroma_collection,
     openai_client: OpenAI,
     config: dict,
+    progress_tracker: ProgressTracker,
 ) -> tuple[bool, int, str | None]:
     """Process one file atomically.
 
@@ -141,7 +156,7 @@ def process_file(
         # 1. Parse XML
         articles = extract_articles_from_xml(xml_path)
         if not articles:
-            logger.warning(f"  No articles in {doc_id}")
+            progress_tracker.log_warning(f"No articles in {doc_id}")
             return True, 0, None
 
         # 2. Chunk articles
@@ -158,11 +173,13 @@ def process_file(
         if not all_chunks:
             return True, 0, None
 
-        logger.info(f"  Chunked: {len(all_chunks)} chunks")
+        logger.debug(f"  Chunked: {len(all_chunks)} chunks")
 
-        # 3. Embed
-        enriched = embed_chunks(all_chunks, openai_client, config["embedding_model"])
-        logger.info(f"  Embedded: {len(enriched)} chunks")
+        # 3. Embed (with progress tracking)
+        enriched = embed_chunks(
+            all_chunks, openai_client, config["embedding_model"], progress_tracker
+        )
+        logger.debug(f"  Embedded: {len(enriched)} chunks")
 
         # 4. Generate vector IDs
         vector_ids = [f"{doc_id}_chunk_{i}" for i in range(len(enriched))]
@@ -180,25 +197,25 @@ def process_file(
             documents=[c.text for c in enriched],
         )
 
-        logger.info(f"  Indexed: {len(vector_ids)} vectors")
+        logger.debug(f"  Indexed: {len(vector_ids)} vectors")
 
         return True, len(all_chunks), None
 
     except Exception as e:
-        logger.error(f"  Failed: {e}")
+        logger.debug(f"  Failed: {e}")
 
         # Clean up any partial vectors that may have been indexed
         if vector_ids_to_cleanup:
             try:
                 chroma_collection.delete(ids=vector_ids_to_cleanup)
-                logger.info(f"  Cleaned up {len(vector_ids_to_cleanup)} partial vectors")
+                logger.debug(f"  Cleaned up {len(vector_ids_to_cleanup)} partial vectors")
             except Exception as cleanup_error:
-                logger.warning(f"  Failed to clean up partial vectors: {cleanup_error}")
+                logger.debug(f"  Failed to clean up partial vectors: {cleanup_error}")
 
         return False, 0, str(e)
 
 
-def run_pipeline(config: dict):
+def run_pipeline(config: dict, progress_tracker: ProgressTracker | None = None):
     """Run complete pipeline.
 
     Config should have:
@@ -209,9 +226,17 @@ def run_pipeline(config: dict):
         - openai_api_key: str
         - chroma_path: str
         - force: bool (optional)
+
+    Args:
+        config: Pipeline configuration dictionary
+        progress_tracker: Optional progress tracker. If None, uses NoOpProgressTracker.
     """
     from lovdata_pipeline.lovlig import Lovlig
     from lovdata_pipeline.state import ProcessingState
+
+    # Use NoOp tracker if none provided (maintains backward compatibility)
+    if progress_tracker is None:
+        progress_tracker = NoOpProgressTracker()
 
     data_dir = Path(config["data_dir"])
 
@@ -240,11 +265,12 @@ def run_pipeline(config: dict):
         raise RuntimeError(f"ChromaDB connection failed: {e}") from e
 
     # Step 1: Sync
-    logger.info("═══ Syncing datasets ═══")
+    progress_tracker.start_stage("sync", "Syncing datasets")
     stats = lovlig.sync(force=config.get("force", False))
-    logger.info(
-        f"Added: {stats['added']}, Modified: {stats['modified']}, Removed: {stats['removed']}"
+    logger.debug(
+        f"Sync stats - Added: {stats['added']}, Modified: {stats['modified']}, Removed: {stats['removed']}"
     )
+    progress_tracker.end_stage("sync")
 
     # Validate lovlig state was created
     if not lovlig.state_file.exists():
@@ -254,7 +280,7 @@ def run_pipeline(config: dict):
         )
 
     # Step 2: Get files to process
-    logger.info("═══ Identifying files ═══")
+    progress_tracker.start_stage("identify", "Identifying files")
     changed = lovlig.get_changed_files()
     removed = lovlig.get_removed_files()
 
@@ -267,53 +293,70 @@ def run_pipeline(config: dict):
             if not state.is_processed(f["doc_id"], f["hash"]):
                 to_process.append(f)
 
-    logger.info(f"Processing {len(to_process)} files, skipped {len(changed) - len(to_process)}")
+    logger.debug(f"Processing {len(to_process)} files, skipped {len(changed) - len(to_process)}")
+    progress_tracker.end_stage("identify")
 
     # Step 3: Process each file
-    logger.info("═══ Processing documents ═══")
+    progress_tracker.start_stage("process", "Processing documents")
     processed = 0
     failed = 0
 
-    for idx, file_info in enumerate(to_process, 1):
-        doc_id = file_info["doc_id"]
-        logger.info(f"[{idx}/{len(to_process)}] {doc_id}")
+    # Start file processing progress bar
+    if to_process:
+        progress_tracker.start_file_processing(len(to_process))
 
-        success, chunk_count, error = process_file(file_info, collection, openai_client, config)
+        for idx, file_info in enumerate(to_process, 1):
+            doc_id = file_info["doc_id"]
 
-        if success:
-            # Generate vector IDs for state tracking
-            vector_ids = [f"{doc_id}_chunk_{i}" for i in range(chunk_count)]
-            state.mark_processed(doc_id, file_info["hash"], vector_ids)
-            state.save()
-            processed += 1
-            logger.info(f"✓ {doc_id}: {chunk_count} chunks")
-        else:
-            state.mark_failed(doc_id, file_info["hash"], error or "Unknown error")
-            state.save()
-            failed += 1
-            logger.error(f"✗ {doc_id}: {error}")
+            # Update progress bar with current file
+            progress_tracker.update_file(doc_id, idx - 1, len(to_process))
+
+            success, chunk_count, error = process_file(
+                file_info, collection, openai_client, config, progress_tracker
+            )
+
+            if success:
+                # Generate vector IDs for state tracking
+                vector_ids = [f"{doc_id}_chunk_{i}" for i in range(chunk_count)]
+                state.mark_processed(doc_id, file_info["hash"], vector_ids)
+                state.save()
+                processed += 1
+                progress_tracker.log_success(doc_id, chunk_count)
+            else:
+                state.mark_failed(doc_id, file_info["hash"], error or "Unknown error")
+                state.save()
+                failed += 1
+                progress_tracker.log_error(doc_id, error or "Unknown error")
+
+        # Complete the progress bar
+        progress_tracker.update_file("", len(to_process), len(to_process))
+        progress_tracker.end_file_processing()
+
+    progress_tracker.end_stage("process")
 
     # Step 4: Clean up removed files
     if removed:
-        logger.info("═══ Cleaning up removed documents ═══")
+        progress_tracker.start_stage("cleanup", "Cleaning up removed documents")
+        removed_count = 0
         for r in removed:
             doc_id = r["doc_id"]
             vectors = state.get_vectors(doc_id)
             if vectors:
                 collection.delete(ids=vectors)
-                logger.info(f"Deleted {len(vectors)} vectors for {doc_id}")
+                logger.debug(f"Deleted {len(vectors)} vectors for {doc_id}")
+                removed_count += 1
             else:
-                logger.warning(
+                progress_tracker.log_warning(
                     f"Document {doc_id} removed but not in state. "
-                    "If it was processed before, ghost vectors may remain in ChromaDB."
+                    "Ghost vectors may remain in ChromaDB."
                 )
             state.remove(doc_id)
         state.save()
+        progress_tracker.end_stage("cleanup")
 
     # Summary
-    logger.info("═══ Complete ═══")
-    logger.info(f"Processed: {processed}, Failed: {failed}")
     summary = state.stats()
-    logger.info(f"Total: {summary['processed']} docs, {summary['total_vectors']} vectors")
+    summary["removed"] = len(removed) if removed else 0
+    progress_tracker.show_summary(summary)
 
     return {"processed": processed, "failed": failed}

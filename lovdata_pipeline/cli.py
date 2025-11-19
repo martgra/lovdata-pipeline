@@ -15,14 +15,16 @@ from dotenv import load_dotenv
 from rich.console import Console
 from rich.logging import RichHandler
 
+from lovdata_pipeline.progress import RichProgressTracker
+
 load_dotenv()
 
 app = typer.Typer(help="Lovdata Pipeline - Process Norwegian legal documents")
 console = Console()
 
-# Configure logging
+# Configure logging with DEBUG level (progress bars will show main output)
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format="%(message)s",
     handlers=[RichHandler(rich_tracebacks=True, show_path=False)],
 )
@@ -76,6 +78,7 @@ def process(
 
         console.print("[bold blue]═══ Lovdata Pipeline ═══[/bold blue]")
         console.print(f"Dataset: {dataset}")
+        console.print()  # Add blank line before progress bars
 
         config = {
             "data_dir": Path(data_dir),
@@ -87,11 +90,14 @@ def process(
             "force": force,
         }
 
-        result = run_pipeline(config)
+        # Create progress tracker with Rich console
+        progress_tracker = RichProgressTracker(console=console)
 
-        console.print("\n[bold green]✓ Complete![/bold green]")
-        console.print(f"  Processed: {result['processed']}")
-        console.print(f"  Failed: {result['failed']}")
+        # Run pipeline with progress tracking
+        result = run_pipeline(config, progress_tracker=progress_tracker)
+
+        # Summary is shown by progress_tracker.show_summary()
+        # No need to print duplicate completion message
 
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
