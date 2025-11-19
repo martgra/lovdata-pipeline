@@ -57,7 +57,9 @@ def test_get_changed_file_paths_returns_paths():
         assert "/path/to/file1.xml" in result
         assert "/path/to/file2.xml" in result
 
-        mock_ctx.lovlig_client.get_unprocessed_files.assert_called_once_with(force_reprocess=False)
+        mock_ctx.lovlig_client.get_unprocessed_files.assert_called_once_with(
+            stage="chunking", force_reprocess=False
+        )
 
 
 def test_get_changed_file_paths_empty():

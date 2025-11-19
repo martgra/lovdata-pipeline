@@ -345,15 +345,18 @@ class LovligClient:
 
         return removed_count
 
-    def get_unprocessed_files(self, force_reprocess: bool = False) -> list[FileMetadata]:
-        """Get files that have changed and need processing.
+    def get_unprocessed_files(
+        self, stage: str = "chunking", force_reprocess: bool = False
+    ) -> list[FileMetadata]:
+        """Get files that have changed and need processing for a specific stage.
 
         Returns files where status is 'added' or 'modified' AND either:
-        - File has never been processed (not in manifest)
-        - File hash changed (new version in manifest)
+        - Stage has never been completed (not in manifest)
+        - File hash changed since stage was completed (new version in manifest)
         - force_reprocess=True (ignore manifest state)
 
         Args:
+            stage: Pipeline stage to check ('chunking', 'embedding', 'indexing')
             force_reprocess: If True, return all changed files regardless of processing state
 
         Returns:
@@ -370,8 +373,8 @@ class LovligClient:
         for file_meta in all_changed:
             document_id = file_meta.document_id
 
-            # Check if chunking stage completed for this file
-            if self.manifest.is_stage_completed(document_id, "chunking"):
+            # Check if specified stage completed for this file
+            if self.manifest.is_stage_completed(document_id, stage):
                 # Verify hash matches (detect if file changed after processing)
                 doc_state = self.manifest.get_document(document_id)
                 if doc_state and doc_state.current_version.file_hash == file_meta.file_hash:
