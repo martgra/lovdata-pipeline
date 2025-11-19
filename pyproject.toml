@@ -5,7 +5,16 @@ description = ""
 authors = [{ name = "Martin Gran", email = "martgra@gmail.com" }]
 requires-python = ">=3.11"
 readme = "README.md"
-dependencies = []
+dependencies = [
+    "dagster>=1.12.2",
+    "dagster-webserver>=1.12.2",
+    "lovdata-processing",
+    "lxml>=6.0.2",
+    "openai>=2.8.1",
+    "pydantic>=2.12.4",
+    "pydantic-settings>=2.12.0",
+    "tiktoken>=0.12.0",
+]
 
 [dependency-groups]
 dev = [
@@ -26,6 +35,9 @@ default-groups = [
     "dev",
     "test",
 ]
+
+[tool.uv.sources]
+lovdata-processing = { git = "https://github.com/martgra/lovlig.git" }
 
 [tool.hatch.build.targets.sdist]
 include = ["lovdata_pipeline"]

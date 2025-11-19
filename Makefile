@@ -1,20 +1,25 @@
 # Makefile for uv with smart install + explicit updates
 SHELL := /bin/bash
 .DEFAULT_GOAL := install
-.PHONY: install update-deps test lint format clean run help check all secrets check-tools github-create github-push
+.PHONY: install update-deps test lint format clean run help check all secrets check-tools github-create github-push dagster-dev dagster-sync dagster-chunk dagster-embed dagster-full
 
 # Help target
 help:
 	@echo "Available targets:"
-	@echo "  install      - Install dependencies (frozen)"
-	@echo "  update-deps  - Update and sync dependencies"
-	@echo "  test         - Run tests with pytest"
-	@echo "  lint         - Check code with ruff"
-	@echo "  format       - Format code with ruff"
-	@echo "  run          - Run the main application"
-	@echo "  clean        - Remove cache and temporary files"
-	@echo "  secrets      - Scan for secrets using detect-secrets"
-	@echo "  check-tools  - Check if required tools are installed"
+	@echo "  install       - Install dependencies (frozen)"
+	@echo "  update-deps   - Update and sync dependencies"
+	@echo "  test          - Run tests with pytest"
+	@echo "  lint          - Check code with ruff"
+	@echo "  format        - Format code with ruff"
+	@echo "  run           - Run the main application"
+	@echo "  dagster-dev   - Start Dagster dev server"
+	@echo "  dagster-sync  - Materialize sync assets (download & extract)"
+	@echo "  dagster-chunk - Materialize chunking assets (parse & chunk)"
+	@echo "  dagster-embed - Materialize embedding assets (embed chunks)"
+	@echo "  dagster-full  - Run full pipeline (sync + chunk + embed)"
+	@echo "  clean         - Remove cache and temporary files"
+	@echo "  secrets       - Scan for secrets using detect-secrets"
+	@echo "  check-tools   - Check if required tools are installed"
 	@echo "  github-create - Create GitHub repository (requires gh CLI)"
 	@echo "  github-push   - Push to GitHub (run after github-create)"
 
@@ -39,6 +44,21 @@ format:
 
 run:
 	uv run python lovdata_pipeline/__main__.py
+
+dagster-dev:
+	uv run dagster dev -m lovdata_pipeline
+
+dagster-sync:
+	uv run dagster asset materialize -m lovdata_pipeline --select "lovdata_sync,changed_file_paths,removed_file_metadata"
+
+dagster-chunk:
+	uv run dagster asset materialize -m lovdata_pipeline --select "legal_document_chunks"
+
+dagster-embed:
+	uv run dagster asset materialize -m lovdata_pipeline --select "*enriched_chunks"
+
+dagster-full:
+	uv run dagster asset materialize -m lovdata_pipeline --select "*enriched_chunks"
 
 secrets: .secrets.baseline
 	uv run detect-secrets scan --baseline .secrets.baseline

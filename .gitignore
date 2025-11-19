@@ -6,6 +6,11 @@ __pycache__/
 # C extensions
 *.so
 
+# Data directories (lovdata pipeline)
+data/
+*.bz2
+*.tar.bz2
+
 # Distribution / packaging
 .Python
 build/
@@ -163,3 +168,4 @@ cython_debug/
 temp_out/
 test_output/
 build_output/
+/data/chunks/*.jsonl
