@@ -4,94 +4,69 @@
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue?logo=python&logoColor=white)
 [![Copier](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/copier-org/copier/master/img/badge/badge-grayscale-inverted-border-orange.json)](https://github.com/copier-org/copier)
 
-A solid project template for Python.
-
-## ✨ Features
-
-- **Modern Python** – Requires Python ≥ 3.11.
-- **Dependency management with uv** – Fast dependency installation and lock file management.
-- **Quality tools**
-  - Ruff formats and lints code
-  - Pylint performs deeper static analysis
-  - Deptry detects unused, missing and transitive dependencies
-  - Vulture finds dead code.
-- **Secret scanning with detect-secrets** - Prevent secrets getting commited and pushed.
-- **Git hooks with Prek** – Automated quality checks on every commit and push.
-- **Automated CI/CD** – GitHub Actions run all Prek hooks on pull requests and pushes to ensure code quality.
-- **Dev Container** – Devcontainer provides a reproducible environment with Python 3.13, uv and all tools preconfigured.
+A simple Python pipeline for processing Norwegian legal documents from Lovdata into a searchable vector database.
 
 ## Quick Start
 
-Get started in seconds:
-
 ```bash
-uvx copier copy gh:martgra/python_template <destination> --trust
+# Install dependencies
+make install
+
+# Run pipeline
+uv run python -m lovdata_pipeline process
 ```
 
-## Project Layout
+One command. Atomic per-file processing. Simple state tracking.
 
-```
-lovdata_pipeline/         # Your package
-tests/                      # Test suite
-pyproject.toml              # Dependencies & configuration
-uv.lock                     # Locked versions
-.pre-commit-config.yaml     # Git hook configuration (used by Prek)
-.secrets.baseline           # detect-secrets baseline
-Makefile                    # Common tasks (test, lint, format, etc.)
-.vscode/                  # VSCode settings
-.devcontainer/            # Dev container configuration
-.github/workflows/       # CI/CD workflows
-```
+## Documentation
 
-Python ≥ 3.11 is required locally. The dev container uses Python 3.13.
+### For Users
 
-## Git Hooks (Prek)
+- **[User Guide](docs/USER_GUIDE.md)** - Installation, usage, configuration, troubleshooting
+- **[Quick Reference](docs/QUICK_REFERENCE.md)** - Command cheat sheet
 
-[Prek](https://github.com/j178/prek) is a fast Rust‑based replacement for pre‑commit that uses the same configuration format. Install hooks with:
+### For Developers
 
-```bash
-uvx prek install
-```
+- **[Developer Guide](docs/DEVELOPER_GUIDE.md)** - Architecture, extending, testing, contributing
+- **[Functional Requirements](docs/FUNCTIONAL_REQUIREMENTS.md)** - Specification that all changes must satisfy
 
-### Fast Commit Hooks (run on every commit)
+## What It Does
 
-- **Ruff** – Lints and formats Python code (auto‑fix enabled)
-- **File checks** – Trailing whitespace, end‑of‑file newlines, JSON/YAML/TOML validation
-- **Security** – Detect private keys
+For each file:
 
-### Slower Push Hooks (run on `git push`)
+1. **Sync** - Download from Lovdata (via lovlig library)
+2. **Parse** - Extract articles from XML (XMLParsingService)
+3. **Chunk** - Split into token-sized pieces (ChunkingService)
+4. **Embed** - Generate embeddings via OpenAI (EmbeddingService)
+5. **Index** - Store in ChromaDB (VectorStore)
 
-- **pytest** – Full test suite
-- **Pylint** – Deep static analysis for code design issues
-- **Deptry** – Checks for unused, missing, and transitive dependencies
-- **Vulture** – Finds dead/unused code
-- **detect‑secrets** – Scans for secrets against baseline
-- **uv‑lock** – Validates `pyproject.toml` and lock file consistency
+Atomic processing: each file completes fully before moving to the next.
 
-This two‑tier approach keeps commits fast while ensuring comprehensive quality checks before pushing.
+### Architecture
 
-## CI Pipeline
+The pipeline uses a **service-oriented architecture** with:
 
-GitHub Actions run on pull requests and pushes to the main branch. The workflow uses the same Prek configuration, executing all hooks (both commit and push stages) to ensure code quality.
+- **Dependency Injection** - Services wired through factory pattern
+- **Protocol Interfaces** - Extensible via `EmbeddingProvider` and `VectorStoreRepository` protocols
+- **Domain Services** - Parsing, chunking, embedding, and file processing
+- **Orchestration Layer** - `PipelineOrchestrator` coordinates the workflow
 
-See [`.github/workflows/ci.yaml`](.github/workflows/ci.yaml).
+## Key Features
 
-## Devcontainer
+- **Atomic processing** - Complete each file before moving to next
+- **Simple state** - JSON file tracks processed/failed documents
+- **Change detection** - Uses lovlig library for file changes
+- **Automatic cleanup** - Removes vectors for deleted/modified files
+- **Single command** - No stages, no complex orchestration
+- **Quality tools** - Ruff, Pylint, Prek git hooks
+- **Dev container** - Reproducible environment
 
-For reproducible Docker‑based development, reopen the project in a container (**Dev Containers: Reopen in Container** in VS Code). The container pre‑configures Python 3.13, uv and all tools.
+## Requirements
 
-Docs: [VS Code Dev Containers](https://code.visualstudio.com/docs/devcontainers/containers)
-
-## Template Updates
-
-Keep your project current with template improvements:
-
-```bash
-uvx copier update
-```
-
-Docs: [Copier Updates](https://copier.readthedocs.io/en/stable/updating/)
+- Python ≥ 3.11
+- OpenAI API key (for embeddings)
+- ChromaDB (auto-installed)
 
 ## License
 
-Distributed under the **MIT License**.
+MIT License

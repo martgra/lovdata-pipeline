@@ -47,6 +47,7 @@ repos:
       - id: detect-private-key # Early lightweight key pattern scan
       - id: check-added-large-files
         args: ["--maxkb=500"] # Policy: reject very large blobs
+        exclude: "uv.lock" # Lock files can be large
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.13.2
@@ -98,7 +99,11 @@ repos:
       - id: detect-secrets
         name: Detect Secrets (baseline)
         args: ["--baseline", ".secrets.baseline"]
-        exclude: uv.lock
+        exclude: |
+          (?x)(
+            uv.lock|
+            \.secrets\.baseline
+          )
         stages: [pre-push, manual]
 
   - repo: https://github.com/astral-sh/uv-pre-commit
