@@ -1,7 +1,11 @@
 """Client for tracking which files have been embedded.
 
-This module provides functionality to track embedding state independently
-from chunking state, allowing incremental re-embedding when files change.
+DEPRECATED: This module is deprecated as of Phase 2 refactoring.
+Embedding state tracking has been consolidated into PipelineManifest.
+Use PipelineManifest.is_stage_completed(document_id, "embedding") instead.
+
+This module is kept for backward compatibility with existing tests only.
+It will be removed in a future version.
 """
 
 import json
@@ -9,10 +13,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from lovdata_pipeline.domain.models import FileMetadata
+from lovdata_pipeline.utils.file_ops import atomic_write_json
+from lovdata_pipeline.utils.path_utils import parse_lovdata_path_legacy
 
 
 class EmbeddedFileClient:
     """Client for tracking embedded file state.
+
+    DEPRECATED: Use PipelineManifest for state tracking instead.
 
     Similar to LovligClient's processing state tracking, but specifically
     for embeddings. Tracks which files have been embedded and when.
@@ -49,16 +57,7 @@ class EmbeddedFileClient:
         Args:
             state: Dictionary mapping dataset_name -> {file_path: embedded_info}
         """
-        # Ensure parent directory exists
-        self.embedded_state_file.parent.mkdir(parents=True, exist_ok=True)
-
-        # Write to temp file first
-        temp_file = self.embedded_state_file.with_suffix(".tmp")
-        with open(temp_file, "w") as f:
-            json.dump(state, f, indent=2)
-
-        # Atomic rename
-        temp_file.replace(self.embedded_state_file)
+        atomic_write_json(self.embedded_state_file, state)
 
     def read_lovlig_state(self) -> dict:
         """Read lovlig's state.json file for file hashes.
@@ -105,29 +104,15 @@ class EmbeddedFileClient:
             # Extract dataset and relative path from absolute path
             file_path_obj = Path(file_path)
 
-            # Parse structure: extracted_data_dir/dataset_name/relative_path
-            # We need to find the dataset name and relative path
+            # Parse path using utility function
+            dataset_name, relative_path = parse_lovdata_path_legacy(file_path_obj)
+
+            if not dataset_name or not relative_path:
+                # Can't parse path, include file to be safe
+                files_to_embed.append(self._create_file_metadata(file_path, None, None))
+                continue
+
             try:
-                # Get parts after extracted directory
-                parts = file_path_obj.parts
-                # Find index of "extracted" directory
-                extracted_idx = None
-                for i, part in enumerate(parts):
-                    if part == "extracted":
-                        extracted_idx = i
-                        break
-
-                if extracted_idx is None or extracted_idx + 1 >= len(parts):
-                    # Can't parse path, include file to be safe
-                    files_to_embed.append(self._create_file_metadata(file_path, None, None))
-                    continue
-
-                # Dataset is next part after extracted, relative path is remaining
-                dataset_name_raw = parts[extracted_idx + 1]
-                dataset_name = f"{dataset_name_raw}.tar.bz2"
-                relative_path = str(Path(*parts[extracted_idx + 2 :]))
-
-                # Get current hash from lovlig
                 dataset_state = lovlig_state.get("raw_datasets", {}).get(dataset_name, {})
                 file_state = dataset_state.get("files", {}).get(relative_path, {})
                 current_hash = file_state.get("sha256")

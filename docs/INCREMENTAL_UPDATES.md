@@ -152,13 +152,14 @@ The incremental processing is **automatic** - just run the pipeline as normal:
 
 ```bash
 # First run: processes all files
-uv run dagster asset materialize --select lovdata_chunks
+make chunk
+# or: uv run python -m lovdata_pipeline chunk
 
 # Subsequent runs: only processes changed files
-uv run dagster asset materialize --select lovdata_chunks
+make chunk
 
 # Force reprocessing if needed
-uv run dagster asset materialize --select lovdata_chunks -c force_reprocess=true
+uv run python -m lovdata_pipeline chunk --force-reprocess
 ```
 
 ## Troubleshooting

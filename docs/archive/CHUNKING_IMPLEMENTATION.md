@@ -26,7 +26,7 @@ The splitter uses a three-tier hierarchical approach that respects legal documen
 
 ### 📊 Production-Ready Monitoring
 
-The Dagster asset provides comprehensive metrics:
+The chunking pipeline step provides comprehensive metrics:
 
 - Files processed/failed counts and success rate
 - Total chunks and average chunks per file
@@ -43,19 +43,17 @@ lovdata_pipeline/
 ├── domain/
 │   ├── models.py                           # Added ChunkMetadata model + SplitReason type
 │   ├── parsers/
-│   │   ├── __init__.py                     # NEW
-│   │   └── xml_chunker.py                  # NEW - lxml-based XML parser
+│   │   ├── __init__.py
+│   │   └── xml_chunker.py                  # lxml-based XML parser
 │   └── splitters/
-│       ├── __init__.py                     # NEW
-│       ├── token_counter.py                # NEW - tiktoken wrapper
-│       └── recursive_splitter.py           # NEW - 3-tier splitting logic
+│       ├── __init__.py
+│       ├── token_counter.py                # tiktoken wrapper
+│       └── recursive_splitter.py           # 3-tier splitting logic
 ├── infrastructure/
-│   └── chunk_writer.py                     # NEW - Streaming JSONL writer
-├── assets/
-│   └── chunking.py                         # NEW - Dagster orchestration asset
-├── config/
-│   └── settings.py                         # Updated - Added chunk_max_tokens, chunk_output_path
-└── definitions.py                          # Updated - Registered legal_document_chunks asset
+│   └── chunk_writer.py                     # Streaming JSONL writer
+├── pipeline_steps.py                       # Added chunk_documents() function
+└── config/
+    └── settings.py                         # Updated - Added chunk_max_tokens, chunk_output_path
 ```
 
 ### Dependencies Added
@@ -78,15 +76,18 @@ Output files are stored in `data/chunks/` directory (JSONL files are gitignored)
 
 ## Usage
 
-### Via Dagster UI
+### Via CLI
 
-The `legal_document_chunks` asset depends on `changed_file_paths`:
+```bash
+# Chunk all changed files
+make chunk
+# or: uv run python -m lovdata_pipeline chunk
 
+# Force reprocess all files
+uv run python -m lovdata_pipeline chunk --force-reprocess
 ```
-lovdata_sync → changed_file_paths → legal_document_chunks
-```
 
-Materialize `legal_document_chunks` to process all changed files.
+The chunking step depends on the sync step to identify changed files.
 
 ### Programmatically
 
@@ -186,9 +187,9 @@ All checks passed!
 
 ## Architecture Compliance
 
-✅ **Domain layer** - Pure Python (no Dagster imports)  
+✅ **Domain layer** - Pure Python (no dependencies on orchestration frameworks)
 ✅ **Infrastructure layer** - I/O operations isolated  
-✅ **Asset layer** - Thin orchestration only  
+✅ **Pipeline steps** - Clear function-based orchestration  
 ✅ **Pydantic models** - Type-safe data structures  
 ✅ **Google-style docstrings** - Full documentation  
 ✅ **Memory-efficient** - Streaming at every stage
@@ -211,8 +212,8 @@ All checks passed!
 
 ## References
 
-- Implementation guide: `docs/implementation_guide.md`
-- Architecture guide: `docs/architecture_guide.md`
+- Architecture guide: `docs/ARCHITECTURE.md`
+- Quick reference: `docs/QUICK_REFERENCE.md`
 - Lovlig library: https://github.com/martgra/lovlig
 
 ---

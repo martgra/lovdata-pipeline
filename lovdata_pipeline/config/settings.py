@@ -50,10 +50,6 @@ class LovdataSettings(BaseSettings):
     enriched_data_dir: Path = Field(
         default=Path("./data/enriched"), description="Directory for enriched chunks with embeddings"
     )
-    embedded_files_state: Path = Field(
-        default=Path("./data/embedded_files.json"),
-        description="State file tracking embedded files",
-    )
     embedding_model: str = Field(
         default="text-embedding-3-large",
         description="OpenAI embedding model to use",
@@ -66,6 +62,49 @@ class LovdataSettings(BaseSettings):
         description="Force re-embedding of all files, ignoring embedded_at timestamps",
     )
     openai_api_key: str = Field(default="", description="OpenAI API key for embeddings")
+
+    # Vector database settings
+    vector_db_type: str = Field(
+        default="chroma",
+        description="Vector database type (currently only 'chroma' is supported)",
+    )
+    vector_db_collection: str = Field(
+        default="legal_docs",
+        description="Collection/index name for vector database",
+    )
+
+    # ChromaDB-specific settings (used when vector_db_type='chroma')
+    chroma_mode: str = Field(
+        default="persistent",
+        description="ChromaDB mode: 'memory', 'persistent', or 'client'",
+    )
+    chroma_host: str = Field(
+        default="localhost",
+        description="ChromaDB server host (used in 'client' mode)",
+    )
+    chroma_port: int = Field(
+        default=8000,
+        description="ChromaDB server port (used in 'client' mode)",
+    )
+    chroma_persist_directory: str | None = Field(
+        default="./data/chroma",
+        description="Local directory for persistent storage (used in 'persistent' mode)",
+    )
+
+    # Pipeline manifest
+    pipeline_manifest_path: Path = Field(
+        default=Path("./data/pipeline_manifest.json"),
+        description="Path to pipeline manifest file",
+    )
+
+    @property
+    def data_dir(self) -> Path:
+        """Get the base data directory.
+
+        Returns:
+            Path to data directory
+        """
+        return Path("./data")
 
 
 def get_settings() -> LovdataSettings:

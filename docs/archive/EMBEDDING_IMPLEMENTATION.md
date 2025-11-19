@@ -6,12 +6,13 @@ The embedding pipeline enriches legal document chunks with OpenAI embeddings, im
 
 ## Architecture
 
-### Asset Flow
+### Pipeline Flow
 
 ```
-lovdata_sync → changed_file_paths → legal_document_chunks → enriched_chunks
-             ↘ removed_file_metadata ↗                     ↗
+sync → chunk → embed → index
 ```
+
+The embedding step processes chunks from changed files and enriches them with OpenAI embeddings.
 
 ### Key Components
 
@@ -31,15 +32,10 @@ lovdata_sync → changed_file_paths → legal_document_chunks → enriched_chunk
    - Writes enriched chunks with embeddings to JSONL
    - Handles chunk removal for deleted/modified files
 
-4. **EmbeddingResource** (`resources/embedding.py`)
-
-   - Dagster resource wrapping OpenAI client
-   - Handles batch embedding API calls
-   - Manages embedded file state
-
-5. **enriched_chunks Asset** (`assets/enrichment.py`)
-   - Main processing logic
+4. **embed_chunks()** (`pipeline_steps.py`)
+   - Main processing function
    - Three-pass approach: remove deleted → remove modified → embed and write
+   - Handles OpenAI API calls with batching and retry logic
 
 ## Configuration
 
@@ -151,22 +147,24 @@ for file_meta in files_to_embed:
 # Set API key
 export LOVDATA_OPENAI_API_KEY=sk-...
 
-# Run embedding asset
-uv run dagster asset materialize --select enriched_chunks
+# Run embedding step
+make embed
+# or: uv run python -m lovdata_pipeline embed
 ```
 
 ### Force Re-embedding
 
 ```bash
 # Re-embed all files (e.g., after model upgrade)
-LOVDATA_FORCE_REEMBED=true uv run dagster asset materialize --select enriched_chunks
+uv run python -m lovdata_pipeline embed --force-reembed
 ```
 
 ### Run Full Pipeline
 
 ```bash
-# Sync → Chunk → Embed
-uv run dagster asset materialize --select enriched_chunks+
+# Sync → Chunk → Embed → Index
+make full
+# or: uv run python -m lovdata_pipeline full
 ```
 
 ## Performance
@@ -205,8 +203,8 @@ Daily update: 50 changed files → ~100 chunks → $0.005X (99.5% saved!)
 # Check embedded state
 cat data/embedded_files.json | jq '.["gjeldende-lover.tar.bz2"] | keys'
 
-# Force re-embed specific run
-LOVDATA_FORCE_REEMBED=true uv run dagster asset materialize --select enriched_chunks
+# Force re-embed all files
+uv run python -m lovdata_pipeline embed --force-reembed
 ```
 
 ## Testing
@@ -230,9 +228,9 @@ uv run pytest tests/integration/ -v
 
 ## Monitoring
 
-### Dagster Metadata
+### Pipeline Statistics
 
-The asset provides rich metadata:
+The embedding step provides detailed statistics:
 
 - `files_embedded` - Number of files processed
 - `chunks_embedded` - Total embeddings generated

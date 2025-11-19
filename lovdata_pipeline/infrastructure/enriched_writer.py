@@ -4,8 +4,9 @@ This module provides functionality to write enriched chunks (with embeddings)
 to JSONL format, similar to ChunkWriter but for enriched data.
 """
 
-import json
 from pathlib import Path
+
+import jsonlines
 
 
 class EnrichedChunkWriter:
@@ -33,7 +34,7 @@ class EnrichedChunkWriter:
             mode: File open mode ('a' for append, 'w' for overwrite)
         """
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
-        self.file_handle = open(self.output_path, mode, encoding="utf-8")  # noqa: SIM115
+        self.file_handle = jsonlines.open(self.output_path, mode=mode)
         self.chunks_written = 0
 
     def write_chunk(self, enriched_chunk: dict) -> None:
@@ -48,9 +49,7 @@ class EnrichedChunkWriter:
         if self.file_handle is None:
             raise RuntimeError("File is not open. Call open() first.")
 
-        # Write as JSON line
-        json_line = json.dumps(enriched_chunk, ensure_ascii=False)
-        self.file_handle.write(json_line + "\n")
+        self.file_handle.write(enriched_chunk)
         self.chunks_written += 1
 
     def write_chunks(self, enriched_chunks: list[dict]) -> None:
@@ -98,20 +97,14 @@ class EnrichedChunkWriter:
         kept_count = 0
 
         with (
-            open(self.output_path, encoding="utf-8") as infile,
-            open(temp_path, "w", encoding="utf-8") as outfile,
+            jsonlines.open(self.output_path) as reader,
+            jsonlines.open(temp_path, mode="w") as writer,
         ):
-            for line in infile:
-                try:
-                    chunk_data = json.loads(line)
-                    if chunk_data.get("document_id") == document_id:
-                        removed_count += 1
-                    else:
-                        outfile.write(line)
-                        kept_count += 1
-                except json.JSONDecodeError:
-                    # Keep malformed lines
-                    outfile.write(line)
+            for chunk_data in reader:
+                if chunk_data.get("document_id") == document_id:
+                    removed_count += 1
+                else:
+                    writer.write(chunk_data)
                     kept_count += 1
 
         # Only replace if we kept some chunks or removed some
@@ -139,7 +132,7 @@ class EnrichedChunkWriter:
         self.open()
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(self, _exc_type, _exc_val, _exc_tb):
         """Context manager exit."""
         self.close()
         return False

@@ -11,6 +11,13 @@ data/
 *.bz2
 *.tar.bz2
 
+# Test artifacts
+test_chroma/
+
+# Docker environment
+.env
+.env.local
+
 # Distribution / packaging
 .Python
 build/

@@ -1,5 +1,6 @@
-"""Package."""
+"""Lovdata pipeline package.
 
-from lovdata_pipeline.definitions import defs
+A simple Python pipeline for processing Norwegian legal documents.
+"""
 
-__all__ = ["defs"]
+__version__ = "0.1.0"

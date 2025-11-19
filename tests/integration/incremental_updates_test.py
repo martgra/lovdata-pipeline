@@ -17,6 +17,7 @@ import pytest
 from lovdata_pipeline.domain.models import ChunkMetadata, FileMetadata
 from lovdata_pipeline.infrastructure.chunk_writer import ChunkWriter
 from lovdata_pipeline.infrastructure.lovlig_client import LovligClient
+from lovdata_pipeline.infrastructure.pipeline_manifest import PipelineManifest
 
 
 @pytest.fixture
@@ -53,14 +54,19 @@ def test_incremental_updates_full_cycle(temp_workspace, sample_xml_content):
     state_file = temp_workspace / "data" / "state.json"
     extracted_dir = temp_workspace / "data" / "extracted"
     chunks_file = temp_workspace / "data" / "chunks" / "legal_chunks.jsonl"
+    manifest_file = temp_workspace / "data" / "manifest.json"
 
-    # Create lovlig client
+    # Create manifest
+    manifest = PipelineManifest(manifest_file=manifest_file)
+
+    # Create lovlig client with manifest
     lovlig = LovligClient(
         dataset_filter="gjeldende",
         raw_data_dir=temp_workspace / "data" / "raw",
         extracted_data_dir=extracted_dir,
         state_file=state_file,
         max_download_concurrency=1,
+        manifest=manifest,
     )
 
     # ========== RUN 1: Initial Dataset ==========
@@ -135,7 +141,7 @@ def test_incremental_updates_full_cycle(temp_workspace, sample_xml_content):
             writer.write_chunk(chunk)
 
             # Mark as processed
-            lovlig.mark_file_processed(file_meta.dataset_name, file_meta.relative_path, processed_at=t1.isoformat())
+            lovlig.mark_file_processed(file_meta.dataset_name, file_meta.relative_path)
 
     # Verify initial chunks
     chunks_run1 = []
@@ -311,9 +317,13 @@ def test_multiple_modifications_same_document(temp_workspace, sample_xml_content
     state_file = temp_workspace / "data" / "state.json"
     extracted_dir = temp_workspace / "data" / "extracted"
     chunks_file = temp_workspace / "data" / "chunks" / "legal_chunks.jsonl"
+    manifest_file = temp_workspace / "data" / "manifest.json"
 
     doc_path = extracted_dir / "gjeldende-lover" / "nl" / "nl-test.xml"
     doc_path.write_text(sample_xml_content("nl-test", "Version 1"))
+
+    # Create manifest
+    manifest = PipelineManifest(manifest_file=manifest_file)
 
     lovlig = LovligClient(
         dataset_filter="gjeldende",
@@ -321,6 +331,7 @@ def test_multiple_modifications_same_document(temp_workspace, sample_xml_content
         extracted_data_dir=extracted_dir,
         state_file=state_file,
         max_download_concurrency=1,
+        manifest=manifest,
     )
 
     # Run through 3 versions
@@ -375,7 +386,7 @@ def test_multiple_modifications_same_document(temp_workspace, sample_xml_content
             writer.write_chunk(chunk)
 
         # Mark as processed with timestamp before next update
-        lovlig.mark_file_processed("gjeldende-lover.tar.bz2", "nl/nl-test.xml", processed_at=timestamps[version-1].isoformat())
+        lovlig.mark_file_processed("gjeldende-lover.tar.bz2", "nl/nl-test.xml")
 
         # Verify only latest version exists
         chunks = []

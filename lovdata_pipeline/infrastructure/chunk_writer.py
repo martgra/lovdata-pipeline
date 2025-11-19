@@ -4,8 +4,9 @@ This module provides functionality to write chunks to JSONL format
 one line at a time, ensuring memory-efficient output.
 """
 
-import json
 from pathlib import Path
+
+import jsonlines
 
 from lovdata_pipeline.domain.models import ChunkMetadata
 
@@ -34,14 +35,14 @@ class ChunkWriter:
             mode: File open mode ('a' for append, 'w' for overwrite)
         """
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
-        self.file_handle = open(self.output_path, mode, encoding="utf-8")  # noqa: SIM115
+        self.file_handle = jsonlines.open(self.output_path, mode=mode)
         self.chunks_written = 0
 
-    def write_chunk(self, chunk: ChunkMetadata) -> None:
+    def write_chunk(self, chunk: ChunkMetadata | dict) -> None:
         """Write a single chunk to the file.
 
         Args:
-            chunk: ChunkMetadata to write
+            chunk: ChunkMetadata or dict to write
 
         Raises:
             RuntimeError: If file is not open
@@ -50,16 +51,15 @@ class ChunkWriter:
             raise RuntimeError("File is not open. Call open() first.")
 
         # Convert to dict and write as JSON line
-        chunk_dict = chunk.model_dump()
-        json_line = json.dumps(chunk_dict, ensure_ascii=False)
-        self.file_handle.write(json_line + "\n")
+        chunk_dict = chunk if isinstance(chunk, dict) else chunk.model_dump()
+        self.file_handle.write(chunk_dict)
         self.chunks_written += 1
 
-    def write_chunks(self, chunks: list[ChunkMetadata]) -> None:
+    def write_chunks(self, chunks: list[ChunkMetadata] | list[dict]) -> None:
         """Write multiple chunks to the file.
 
         Args:
-            chunks: List of ChunkMetadata to write
+            chunks: List of ChunkMetadata or dict to write
         """
         for chunk in chunks:
             self.write_chunk(chunk)
@@ -100,20 +100,14 @@ class ChunkWriter:
         kept_count = 0
 
         with (
-            open(self.output_path, encoding="utf-8") as infile,
-            open(temp_path, "w", encoding="utf-8") as outfile,
+            jsonlines.open(self.output_path) as reader,
+            jsonlines.open(temp_path, mode="w") as writer,
         ):
-            for line in infile:
-                try:
-                    chunk_data = json.loads(line)
-                    if chunk_data.get("document_id") == document_id:
-                        removed_count += 1
-                    else:
-                        outfile.write(line)
-                        kept_count += 1
-                except json.JSONDecodeError:
-                    # Keep malformed lines
-                    outfile.write(line)
+            for chunk_data in reader:
+                if chunk_data.get("document_id") == document_id:
+                    removed_count += 1
+                else:
+                    writer.write(chunk_data)
                     kept_count += 1
 
         # Only replace if we kept some chunks or removed some
@@ -141,7 +135,7 @@ class ChunkWriter:
         self.open()
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(self, _exc_type, _exc_val, _exc_tb):
         """Context manager exit."""
         self.close()
         return False

@@ -3,11 +3,9 @@
 This module wraps the lovlig library and provides a clean interface
 for interacting with Lovdata datasets without exposing implementation details.
 
-Processing State:
-    The client maintains a separate processed_files.json to track which files
-    have been successfully processed. This is independent of lovlig's state.json
-    because lovlig regenerates its state on every sync, which would wipe out
-    any custom fields we add.
+State Management:
+    Uses PipelineManifest for unified state tracking across all pipeline stages.
+    No longer maintains separate processed_files.json - all state is in the manifest.
 """
 
 import json
@@ -20,6 +18,7 @@ from lovdata_processing import Settings as LovligSettings
 from lovdata_processing import sync_datasets
 
 from lovdata_pipeline.domain.models import FileMetadata, RemovalInfo, SyncStatistics
+from lovdata_pipeline.infrastructure.pipeline_manifest import PipelineManifest
 
 
 class LovligClient:
@@ -36,6 +35,7 @@ class LovligClient:
         extracted_data_dir: Directory for extracted XML files
         state_file: Path to lovlig state.json file
         max_download_concurrency: Maximum concurrent downloads
+        manifest: Optional PipelineManifest for unified state tracking
     """
 
     def __init__(
@@ -45,6 +45,7 @@ class LovligClient:
         extracted_data_dir: Path,
         state_file: Path,
         max_download_concurrency: int = 4,
+        manifest: PipelineManifest | None = None,
     ):
         """Initialize the lovlig client."""
         self.dataset_filter = dataset_filter
@@ -52,8 +53,7 @@ class LovligClient:
         self.extracted_data_dir = extracted_data_dir
         self.state_file = state_file
         self.max_download_concurrency = max_download_concurrency
-        # Separate file for tracking processing state (independent of lovlig)
-        self.processed_state_file = state_file.parent / "processed_files.json"
+        self.manifest = manifest
 
     def get_lovlig_settings(self) -> LovligSettings:
         """Create lovlig Settings object from client config.
@@ -246,110 +246,102 @@ class LovligClient:
 
         return result
 
-    def read_processed_state(self) -> dict[str, dict[str, str]]:
-        """Read the processing state file.
-
-        Returns:
-            Dictionary mapping dataset_name -> {file_path: processed_at_timestamp}
-        """
-        if not self.processed_state_file.exists():
-            return {}
-
-        try:
-            with open(self.processed_state_file) as f:
-                return json.load(f)
-        except (json.JSONDecodeError, OSError):
-            return {}
-
-    def write_processed_state(self, state: dict[str, dict[str, str]]) -> None:
-        """Write processing state atomically.
-
-        Args:
-            state: Dictionary mapping dataset_name -> {file_path: processed_at_timestamp}
-        """
-        # Ensure parent directory exists
-        self.processed_state_file.parent.mkdir(parents=True, exist_ok=True)
-
-        # Write to temp file first
-        temp_file = self.processed_state_file.with_suffix(".tmp")
-        with open(temp_file, "w") as f:
-            json.dump(state, f, indent=2)
-
-        # Atomic rename
-        temp_file.replace(self.processed_state_file)
-
     def mark_file_processed(
-        self, dataset_name: str, file_path: str, processed_at: str | None = None
+        self,
+        dataset_name: str,
+        file_path: str,
+        file_hash: str | None = None,
+        _processed_at: str | None = None,  # Keep for backward compatibility but ignore
     ) -> None:
-        """Mark a file as successfully processed.
-
-        Updates processed_files.json (separate from lovlig's state.json).
+        """Mark a file as successfully processed in the manifest.
 
         Args:
             dataset_name: Dataset name (e.g., 'gjeldende-lover.tar.bz2')
             file_path: Relative file path within dataset
-            processed_at: Optional ISO timestamp (defaults to now)
+            file_hash: File hash for tracking (optional, will lookup if not provided)
+            processed_at: Deprecated - kept for backward compatibility but ignored
         """
-        processed_state = self.read_processed_state()
+        if not self.manifest:
+            # Legacy: Skip if no manifest provided
+            return
 
-        # Ensure dataset entry exists
-        if dataset_name not in processed_state:
-            processed_state[dataset_name] = {}
+        # Get document ID from file path
+        document_id = Path(file_path).stem
 
-        # Set processed_at timestamp
-        timestamp = processed_at or datetime.now(UTC).isoformat()
-        processed_state[dataset_name][file_path] = timestamp
+        # Get file hash if not provided
+        if not file_hash:
+            try:
+                state = self.read_state()
+                dataset_files = state.get("raw_datasets", {}).get(dataset_name, {}).get("files", {})
+                file_state = dataset_files.get(file_path, {})
+                file_hash = file_state.get("sha256", "unknown")
+            except (FileNotFoundError, KeyError):
+                file_hash = "unknown"
 
-        # Write back atomically
-        self.write_processed_state(processed_state)
+        # Get file size
+        dataset_dir = dataset_name.replace(".tar.bz2", "")
+        absolute_path = self.extracted_data_dir / dataset_dir / file_path
+        file_size = absolute_path.stat().st_size if absolute_path.exists() else 0
+
+        # Ensure document exists in manifest
+        self.manifest.ensure_document(
+            document_id=document_id,
+            dataset_name=dataset_name,
+            relative_path=file_path,
+            file_hash=file_hash,
+            file_size_bytes=file_size,
+        )
+
+        # Mark chunking stage complete
+        try:
+            self.manifest.complete_stage(
+                document_id=document_id,
+                file_hash=file_hash,
+                stage="chunking",
+                output={"output_file": "legal_chunks.jsonl"},
+                metadata={"processed_at": datetime.now(UTC).isoformat()},
+            )
+            self.manifest.save()
+        except ValueError:
+            # Document/hash mismatch, skip
+            pass
 
     def clean_removed_files_from_processed_state(self) -> int:
-        """Remove entries for files that no longer exist in lovlig's state.
+        """Mark removed files in the manifest.
 
-        This cleans up processed_files.json by removing tracking for files
-        that have been removed from the dataset.
+        Updates manifest to mark documents as deleted when they've been removed
+        from the lovdata dataset.
 
         Returns:
-            Number of entries removed from processing state
+            Number of documents marked as removed
         """
-        processed_state = self.read_processed_state()
+        if not self.manifest:
+            return 0
+
         lovlig_state = self.read_state()
-
         removed_count = 0
-        datasets_to_remove = []
 
-        for dataset_name, processed_files in processed_state.items():
-            # Get current files in this dataset from lovlig
-            dataset_files = (
-                lovlig_state.get("raw_datasets", {}).get(dataset_name, {}).get("files", {})
-            )
+        # Get all documents in manifest
+        for doc_id, _doc_state in list(self.manifest.documents.items()):
+            # Check if file still exists or has status="removed" in lovlig state
+            found_active = False
+            for _dataset_name, dataset_state in lovlig_state.get("raw_datasets", {}).items():
+                for file_path, file_info in dataset_state.get("files", {}).items():
+                    if Path(file_path).stem == doc_id:
+                        # Check status - if removed, treat as not found
+                        if file_info.get("status") != "removed":
+                            found_active = True
+                        break
+                if found_active:
+                    break
 
-            # Find files in processed state that are removed or no longer exist in lovlig
-            files_to_remove = []
-            for file_path in list(processed_files.keys()):
-                file_state = dataset_files.get(file_path, {})
-                status = file_state.get("status")
-
-                # Remove if file doesn't exist in lovlig or has status='removed'
-                if not file_state or status == "removed":
-                    files_to_remove.append(file_path)
-
-            # Remove the files
-            for file_path in files_to_remove:
-                del processed_files[file_path]
+            if not found_active:
+                # File removed or marked as removed, mark in manifest
+                self.manifest.mark_document_removed(doc_id)
                 removed_count += 1
 
-            # If dataset now has no processed files, mark for removal
-            if not processed_files:
-                datasets_to_remove.append(dataset_name)
-
-        # Remove empty dataset entries
-        for dataset_name in datasets_to_remove:
-            del processed_state[dataset_name]
-
-        # Write back if we made changes
         if removed_count > 0:
-            self.write_processed_state(processed_state)
+            self.manifest.save()
 
         return removed_count
 
@@ -357,9 +349,9 @@ class LovligClient:
         """Get files that have changed and need processing.
 
         Returns files where status is 'added' or 'modified' AND either:
-        - File has never been processed (not in processed_files.json)
-        - File changed after it was last processed (last_changed > processed_at)
-        - force_reprocess=True (ignore processed_at entirely)
+        - File has never been processed (not in manifest)
+        - File hash changed (new version in manifest)
+        - force_reprocess=True (ignore manifest state)
 
         Args:
             force_reprocess: If True, return all changed files regardless of processing state
@@ -370,47 +362,23 @@ class LovligClient:
         # Get all changed files from lovlig
         all_changed = self.get_changed_files()
 
-        if force_reprocess:
+        if force_reprocess or not self.manifest:
             return all_changed
 
-        # Load processing state (separate from lovlig's state)
-        processed_state = self.read_processed_state()
-        lovlig_state = self.read_state()
         unprocessed = []
 
         for file_meta in all_changed:
-            # Check if file has been processed
-            dataset_processed = processed_state.get(file_meta.dataset_name, {})
-            processed_at_str = dataset_processed.get(file_meta.relative_path)
+            document_id = file_meta.document_id
 
-            if not processed_at_str:
-                # Never processed
-                unprocessed.append(file_meta)
-                continue
+            # Check if chunking stage completed for this file
+            if self.manifest.is_stage_completed(document_id, "chunking"):
+                # Verify hash matches (detect if file changed after processing)
+                doc_state = self.manifest.get_document(document_id)
+                if doc_state and doc_state.current_version.file_hash == file_meta.file_hash:
+                    # Already processed with same hash, skip
+                    continue
 
-            # Check if file changed after being processed
-            # Get last_changed from lovlig's state
-            dataset_files = (
-                lovlig_state.get("raw_datasets", {})
-                .get(file_meta.dataset_name, {})
-                .get("files", {})
-            )
-            file_state = dataset_files.get(file_meta.relative_path, {})
-            last_changed_str = file_state.get("last_changed")
-
-            if last_changed_str:
-                try:
-                    last_changed = datetime.fromisoformat(last_changed_str)
-                    processed_at = datetime.fromisoformat(processed_at_str)
-
-                    if last_changed > processed_at:
-                        # File changed after processing
-                        unprocessed.append(file_meta)
-                except (ValueError, TypeError):
-                    # If we can't parse timestamps, include the file to be safe
-                    unprocessed.append(file_meta)
-            else:
-                # No last_changed timestamp - include to be safe
-                unprocessed.append(file_meta)
+            # Needs processing
+            unprocessed.append(file_meta)
 
         return unprocessed

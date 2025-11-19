@@ -1,7 +1,7 @@
-# Makefile for uv with smart install + explicit updates
+# Makefile for Lovdata pipeline
 SHELL := /bin/bash
 .DEFAULT_GOAL := install
-.PHONY: install update-deps test lint format clean run help check all secrets check-tools github-create github-push dagster-dev dagster-sync dagster-chunk dagster-embed dagster-full
+.PHONY: install update-deps test lint format clean run help check all secrets check-tools github-create github-push sync chunk embed index reconcile full
 
 # Help target
 help:
@@ -12,11 +12,12 @@ help:
 	@echo "  lint          - Check code with ruff"
 	@echo "  format        - Format code with ruff"
 	@echo "  run           - Run the main application"
-	@echo "  dagster-dev   - Start Dagster dev server"
-	@echo "  dagster-sync  - Materialize sync assets (download & extract)"
-	@echo "  dagster-chunk - Materialize chunking assets (parse & chunk)"
-	@echo "  dagster-embed - Materialize embedding assets (embed chunks)"
-	@echo "  dagster-full  - Run full pipeline (sync + chunk + embed)"
+	@echo "  sync          - Run dataset sync step"
+	@echo "  chunk         - Run document chunking step"
+	@echo "  embed         - Run embedding step"
+	@echo "  index         - Run vector indexing step"
+	@echo "  reconcile     - Reconcile index (remove ghost documents)"
+	@echo "  full          - Run complete pipeline"
 	@echo "  clean         - Remove cache and temporary files"
 	@echo "  secrets       - Scan for secrets using detect-secrets"
 	@echo "  check-tools   - Check if required tools are installed"
@@ -43,22 +44,25 @@ format:
 	uv run ruff format lovdata_pipeline tests
 
 run:
-	uv run python lovdata_pipeline/__main__.py
+	uv run python -m lovdata_pipeline
 
-dagster-dev:
-	uv run dagster dev -m lovdata_pipeline
+sync:
+	uv run python -m lovdata_pipeline sync
 
-dagster-sync:
-	uv run dagster asset materialize -m lovdata_pipeline --select "lovdata_sync,changed_file_paths,removed_file_metadata"
+chunk:
+	uv run python -m lovdata_pipeline chunk
 
-dagster-chunk:
-	uv run dagster asset materialize -m lovdata_pipeline --select "legal_document_chunks"
+embed:
+	uv run python -m lovdata_pipeline embed
 
-dagster-embed:
-	uv run dagster asset materialize -m lovdata_pipeline --select "*enriched_chunks"
+index:
+	uv run python -m lovdata_pipeline index
 
-dagster-full:
-	uv run dagster asset materialize -m lovdata_pipeline --select "*enriched_chunks"
+reconcile:
+	uv run python -m lovdata_pipeline reconcile
+
+full:
+	uv run python -m lovdata_pipeline full
 
 secrets: .secrets.baseline
 	uv run detect-secrets scan --baseline .secrets.baseline

@@ -5,7 +5,7 @@ Uses Pydantic for validation, serialization, and type safety.
 """
 
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, computed_field
 
@@ -94,6 +94,7 @@ class ChunkMetadata(BaseModel):
     Attributes:
         chunk_id: Unique identifier for this chunk
         document_id: ID of the source document
+        dataset_name: Name of the dataset (e.g., 'gjeldende-lover.tar.bz2')
         content: The actual text content of the chunk
         token_count: Number of tokens in the content
         section_heading: Title/heading of the legal section
@@ -104,6 +105,9 @@ class ChunkMetadata(BaseModel):
 
     chunk_id: str = Field(description="Unique identifier for this chunk")
     document_id: str = Field(description="Source document identifier")
+    dataset_name: str = Field(
+        default="", description="Dataset name (e.g., 'gjeldende-lover.tar.bz2')"
+    )
     content: str = Field(description="Text content of the chunk")
     token_count: int = Field(ge=0, description="Number of tokens in content")
     section_heading: str = Field(default="", description="Legal section heading")
@@ -112,3 +116,58 @@ class ChunkMetadata(BaseModel):
     parent_chunk_id: str | None = Field(
         default=None, description="Parent chunk ID if this is a sub-chunk"
     )
+
+    @property
+    def text(self) -> str:
+        """Alias for content attribute.
+
+        Provides compatibility for code expecting .text instead of .content.
+
+        Returns:
+            The chunk's text content
+        """
+        return self.content
+
+
+class EnrichedChunk(ChunkMetadata):
+    """Chunk with embedding and metadata for vector storage.
+
+    Extends ChunkMetadata with embedding information for vector database indexing.
+
+    Attributes:
+        embedding: Vector embedding of the chunk content
+        embedding_model: Name of the model used to generate the embedding
+        embedded_at: Timestamp when the embedding was created
+    """
+
+    embedding: list[float] = Field(description="Vector embedding of the content")
+    embedding_model: str = Field(description="Model used for embedding")
+    embedded_at: str = Field(description="ISO timestamp when embedded")
+
+    @property
+    def metadata(self) -> dict[str, Any]:
+        """Get metadata dict for vector DB storage.
+
+        Returns:
+            Dictionary containing all metadata fields for vector database
+        """
+        # Reconstruct file_path from dataset_name and document_id
+        file_path = (
+            f"data/extracted/{self.dataset_name}/{self.document_id}.xml"
+            if self.dataset_name
+            else ""
+        )
+
+        return {
+            "document_id": self.document_id,
+            "dataset_name": self.dataset_name,
+            "file_path": file_path,
+            "section_heading": self.section_heading,
+            "absolute_address": self.absolute_address,
+            "token_count": self.token_count,
+            "split_reason": self.split_reason,
+            "parent_chunk_id": self.parent_chunk_id,
+            "embedded_at": self.embedded_at,
+            "embedding_model": self.embedding_model,
+            "chunk_id": self.chunk_id,
+        }

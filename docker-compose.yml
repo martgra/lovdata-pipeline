@@ -1,0 +1,20 @@
+# Docker Compose for Lovdata Pipeline
+# Provides ChromaDB vector database service
+
+services:
+  # ChromaDB vector database
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: lovdata-chromadb
+    ports:
+      - "8000:8000"
+    volumes:
+      - chroma-data:/chroma/chroma
+    environment:
+      IS_PERSISTENT: "TRUE"
+      ANONYMIZED_TELEMETRY: "FALSE"
+    restart: unless-stopped
+
+volumes:
+  chroma-data:
+    driver: local
