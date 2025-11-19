@@ -75,27 +75,30 @@ def sync_datasets(force_download: bool = False) -> dict:
     }
 
 
-def get_changed_file_paths(force_reprocess: bool = False) -> list[str]:
-    """Get list of XML file paths that need processing.
+def get_changed_file_paths(stage: str = "chunking", force_reprocess: bool = False) -> list[str]:
+    """Get list of XML file paths that need processing for a specific stage.
 
     Args:
+        stage: Pipeline stage to check ('chunking', 'embedding', 'indexing')
         force_reprocess: If True, return all changed files regardless of processed state
 
     Returns:
         List of absolute file paths as strings
     """
     ctx = _create_context()
-    logger.info(f"Querying state for unprocessed files (force_reprocess={force_reprocess})")
+    logger.info(f"Querying state for unprocessed files (stage={stage}, force_reprocess={force_reprocess})")
 
-    unprocessed_files = ctx.lovlig_client.get_unprocessed_files(force_reprocess=force_reprocess)
+    unprocessed_files = ctx.lovlig_client.get_unprocessed_files(
+        stage=stage, force_reprocess=force_reprocess
+    )
     file_paths = [str(f.absolute_path) for f in unprocessed_files]
 
     if not file_paths:
-        logger.info("No unprocessed files found")
+        logger.info(f"No unprocessed files found for stage '{stage}'")
         return []
 
     total_size_mb = sum(f.file_size_bytes for f in unprocessed_files) / (1024 * 1024)
-    logger.info(f"Found {len(file_paths)} unprocessed files ({total_size_mb:.2f} MB)")
+    logger.info(f"Found {len(file_paths)} unprocessed files for stage '{stage}' ({total_size_mb:.2f} MB)")
 
     return file_paths
 
@@ -328,8 +331,8 @@ def embed_chunks(changed_file_paths: list[str], force_reembed: bool = False) -> 
     """Generate embeddings for chunks using OpenAI.
 
     Args:
-        changed_file_paths: List of changed file paths
-        force_reembed: If True, re-embed all chunks
+        changed_file_paths: List of file paths that need embedding (already filtered by stage)
+        force_reembed: If True, re-embed all chunks (should match force_reprocess in CLI)
 
     Returns:
         Statistics dictionary with embedding results
@@ -337,28 +340,8 @@ def embed_chunks(changed_file_paths: list[str], force_reembed: bool = False) -> 
     ctx = _create_context()
     logger.info("Starting chunk embedding")
 
-    # Determine which files need embedding using manifest
-    files_to_embed = []
-    for file_path in changed_file_paths:
-        document_id = Path(file_path).stem
-
-        if force_reembed:
-            # Force re-embed everything
-            files_to_embed.append(file_path)
-        elif not ctx.manifest.is_stage_completed(document_id, "embedding"):
-            # Never embedded or failed
-            files_to_embed.append(file_path)
-        else:
-            # Check if hash changed since embedding
-            doc_state = ctx.manifest.get_document(document_id)
-            if doc_state:
-                # Get current hash from lovlig
-                for changed_file in ctx.lovlig_client.get_changed_files():
-                    if changed_file.document_id == document_id:
-                        if changed_file.file_hash != doc_state.current_version.file_hash:
-                            # Hash changed, needs re-embedding
-                            files_to_embed.append(file_path)
-                        break
+    # Use the already-filtered file list from get_changed_file_paths(stage="embedding")
+    files_to_embed = changed_file_paths
 
     logger.info(f"Embedding chunks from {len(files_to_embed)} files")
 

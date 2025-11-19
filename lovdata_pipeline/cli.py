@@ -61,7 +61,9 @@ def chunk(
     """
     try:
         console.print("[bold blue]═══ Running Document Chunking ═══[/bold blue]")
-        changed_paths = pipeline_steps.get_changed_file_paths(force_reprocess=force_reprocess)
+        changed_paths = pipeline_steps.get_changed_file_paths(
+            stage="chunking", force_reprocess=force_reprocess
+        )
         removed_metadata = pipeline_steps.get_removed_file_metadata()
         stats = pipeline_steps.chunk_documents(changed_paths, removed_metadata)
         console.print(f"[green]✓[/green] Chunking complete: {stats}")
@@ -82,7 +84,9 @@ def embed(
     """
     try:
         console.print("[bold blue]═══ Running Chunk Embedding ═══[/bold blue]")
-        changed_paths = pipeline_steps.get_changed_file_paths()
+        changed_paths = pipeline_steps.get_changed_file_paths(
+            stage="embedding", force_reprocess=force_reembed
+        )
         stats = pipeline_steps.embed_chunks(changed_paths, force_reembed=force_reembed)
         console.print(f"[green]✓[/green] Embedding complete: {stats}")
     except Exception as e:
@@ -98,7 +102,7 @@ def index():
     """
     try:
         console.print("[bold blue]═══ Running Vector Indexing ═══[/bold blue]")
-        changed_paths = pipeline_steps.get_changed_file_paths()
+        changed_paths = pipeline_steps.get_changed_file_paths(stage="indexing")
         removed_metadata = pipeline_steps.get_removed_file_metadata()
         stats = pipeline_steps.index_embeddings(changed_paths, removed_metadata)
         console.print(f"[green]✓[/green] Indexing complete: {stats}")
@@ -146,20 +150,26 @@ def full(
 
         # Chunk
         console.print("\n[bold blue]Step 2/4: Chunk[/bold blue]")
-        changed_paths = pipeline_steps.get_changed_file_paths(force_reprocess=force_reprocess)
+        changed_paths = pipeline_steps.get_changed_file_paths(
+            stage="chunking", force_reprocess=force_reprocess
+        )
         removed_metadata = pipeline_steps.get_removed_file_metadata()
         stats = pipeline_steps.chunk_documents(changed_paths, removed_metadata)
         console.print(f"[green]✓[/green] {stats}")
 
         # Embed
         console.print("\n[bold blue]Step 3/4: Embed[/bold blue]")
-        changed_paths = pipeline_steps.get_changed_file_paths()
+        changed_paths = pipeline_steps.get_changed_file_paths(
+            stage="embedding", force_reprocess=force_reprocess
+        )
         stats = pipeline_steps.embed_chunks(changed_paths, force_reembed=force_reprocess)
         console.print(f"[green]✓[/green] {stats}")
 
         # Index
         console.print("\n[bold blue]Step 4/4: Index[/bold blue]")
-        changed_paths = pipeline_steps.get_changed_file_paths()
+        changed_paths = pipeline_steps.get_changed_file_paths(
+            stage="indexing", force_reprocess=force_reprocess
+        )
         removed_metadata = pipeline_steps.get_removed_file_metadata()
         stats = pipeline_steps.index_embeddings(changed_paths, removed_metadata)
         console.print(f"[green]✓[/green] {stats}")
