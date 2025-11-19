@@ -327,8 +327,27 @@ def chunk_documents(changed_file_paths: list[str], removed_file_metadata: list[d
     }
 
 
+def _get_file_hash(ctx: PipelineContext, document_id: str) -> str:
+    """Get file hash for a document from lovlig state.
+
+    Args:
+        ctx: Pipeline context
+        document_id: Document ID
+
+    Returns:
+        File hash, or "unknown" if not found
+    """
+    for changed_file in ctx.lovlig_client.get_changed_files():
+        if changed_file.document_id == document_id:
+            return changed_file.file_hash
+    return "unknown"
+
+
 def embed_chunks(changed_file_paths: list[str], force_reembed: bool = False) -> dict:
-    """Generate embeddings for chunks using OpenAI.
+    """Generate embeddings for chunks using OpenAI with file-level checkpointing.
+
+    Processes files one at a time, updating manifest after each file completes.
+    This enables resume at file granularity without loading everything into memory.
 
     Args:
         changed_file_paths: List of file paths that need embedding (already filtered by stage)
@@ -340,93 +359,91 @@ def embed_chunks(changed_file_paths: list[str], force_reembed: bool = False) -> 
     ctx = _create_context()
     logger.info("Starting chunk embedding")
 
-    # Use the already-filtered file list from get_changed_file_paths(stage="embedding")
-    files_to_embed = changed_file_paths
+    if not changed_file_paths:
+        logger.info("No files to embed")
+        return {"embedded_chunks": 0, "embedded_files": 0, "failed_files": []}
 
-    logger.info(f"Embedding chunks from {len(files_to_embed)} files")
+    logger.info(f"Embedding chunks from {len(changed_file_paths)} files")
 
-    # Read chunks
-    chunks = list(ctx.chunk_reader.read_chunks(file_paths=set(files_to_embed)))
+    total_embedded = 0
+    files_completed = 0
+    files_failed = 0
+    failed_files = []
 
-    if not chunks:
-        logger.info("No chunks to embed")
-        return {"embedded_chunks": 0, "embedded_files": 0}
-
-    logger.info(f"Loaded {len(chunks)} chunks for embedding")
-
-    # Batch embed with OpenAI
-    batch_size = ctx.settings.embedding_batch_size
-    all_embeddings = []
-
-    for i in range(0, len(chunks), batch_size):
-        batch_texts = [chunk.text for chunk in chunks[i : i + batch_size]]
-
-        response = ctx.openai_client.embeddings.create(
-            input=batch_texts, model=ctx.settings.embedding_model
-        )
-
-        batch_embeddings = [item.embedding for item in response.data]
-        all_embeddings.extend(batch_embeddings)
-
-        logger.info(f"Embedded batch {i // batch_size + 1}: {len(batch_texts)} chunks")
-
-    # Write enriched chunks
     ctx.settings.enriched_data_dir.mkdir(parents=True, exist_ok=True)
     enriched_writer = ctx.get_enriched_chunk_writer()
+    batch_size = ctx.settings.embedding_batch_size
 
-    embedded_at = datetime.now(UTC).isoformat()
-    with enriched_writer:
-        for chunk, embedding in zip(chunks, all_embeddings, strict=True):
-            # Ensure dataset_name is set for file_path reconstruction
-            dataset_name = chunk.dataset_name
-            if not dataset_name:
-                # Try to infer from lovlig state
-                for changed_file in ctx.lovlig_client.get_changed_files():
-                    if changed_file.document_id == chunk.document_id:
-                        dataset_name = changed_file.dataset_name
-                        break
-
-            # Create EnrichedChunk with embedding
-            enriched_chunk = EnrichedChunk(
-                chunk_id=chunk.chunk_id,
-                document_id=chunk.document_id,
-                dataset_name=dataset_name,
-                content=chunk.content,
-                token_count=chunk.token_count,
-                section_heading=chunk.section_heading,
-                absolute_address=chunk.absolute_address,
-                split_reason=chunk.split_reason,
-                parent_chunk_id=chunk.parent_chunk_id,
-                embedding=embedding,
-                embedding_model=ctx.settings.embedding_model,
-                embedded_at=embedded_at,
-            )
-            enriched_writer.write_chunk(enriched_chunk.model_dump())
-
-    # Mark files as embedded in manifest
-    file_doc_ids = {}
-    chunks_per_file = {}
-    for chunk in chunks:
-        doc_id = chunk.document_id
-        chunks_per_file[doc_id] = chunks_per_file.get(doc_id, 0) + 1
-
-    for file_path in files_to_embed:
+    # Process each file independently for file-level checkpointing
+    for file_idx, file_path in enumerate(changed_file_paths, 1):
         document_id = Path(file_path).stem
-        file_doc_ids[file_path] = document_id
+        logger.info(f"[{file_idx}/{len(changed_file_paths)}] Embedding {document_id}")
 
-    for file_path, document_id in file_doc_ids.items():
-        # Get file hash
-        file_hash = "unknown"
-        for changed_file in ctx.lovlig_client.get_changed_files():
-            if changed_file.document_id == document_id:
-                file_hash = changed_file.file_hash
-                break
-
-        # Mark embedding stage complete
         try:
+            # Step 1: Clean up old enriched chunks for THIS file only
+            removed = enriched_writer.remove_chunks_for_document(document_id)
+            if removed > 0:
+                logger.info(f"  Removed {removed} old enriched chunks")
+
+            # Step 2: Load chunks for THIS file only (memory efficient)
+            file_chunks = list(ctx.chunk_reader.read_chunks(file_paths={file_path}))
+
+            if not file_chunks:
+                logger.warning(f"  No chunks found for {document_id}")
+                continue
+
+            # Step 3: Embed chunks for this file in batches
+            all_embeddings = []
+            num_batches = (len(file_chunks) + batch_size - 1) // batch_size
+
+            for i in range(0, len(file_chunks), batch_size):
+                batch = file_chunks[i : i + batch_size]
+                batch_texts = [chunk.text for chunk in batch]
+
+                response = ctx.openai_client.embeddings.create(
+                    input=batch_texts, model=ctx.settings.embedding_model
+                )
+
+                batch_embeddings = [item.embedding for item in response.data]
+                all_embeddings.extend(batch_embeddings)
+
+                logger.info(f"  Embedded batch {i // batch_size + 1}/{num_batches}")
+
+            # Step 4: Write enriched chunks for THIS file immediately
+            embedded_at = datetime.now(UTC).isoformat()
+            with enriched_writer:
+                for chunk, embedding in zip(file_chunks, all_embeddings, strict=True):
+                    # Ensure dataset_name is set
+                    dataset_name = chunk.dataset_name
+                    if not dataset_name:
+                        # Try to infer from lovlig state
+                        for changed_file in ctx.lovlig_client.get_changed_files():
+                            if changed_file.document_id == chunk.document_id:
+                                dataset_name = changed_file.dataset_name
+                                break
+
+                    # Create EnrichedChunk with embedding
+                    enriched_chunk = EnrichedChunk(
+                        chunk_id=chunk.chunk_id,
+                        document_id=chunk.document_id,
+                        dataset_name=dataset_name or "",
+                        content=chunk.content,
+                        token_count=chunk.token_count,
+                        section_heading=chunk.section_heading,
+                        absolute_address=chunk.absolute_address,
+                        split_reason=chunk.split_reason,
+                        parent_chunk_id=chunk.parent_chunk_id,
+                        embedding=embedding,
+                        embedding_model=ctx.settings.embedding_model,
+                        embedded_at=embedded_at,
+                    )
+                    enriched_writer.write_chunk(enriched_chunk.model_dump())
+
+            # Step 5: Update manifest for THIS file immediately (checkpoint!)
+            file_hash = _get_file_hash(ctx, document_id)
             ctx.manifest.ensure_document(
                 document_id=document_id,
-                dataset_name="",  # Will be updated if needed
+                dataset_name="",
                 relative_path=file_path,
                 file_hash=file_hash,
                 file_size_bytes=0,
@@ -435,21 +452,35 @@ def embed_chunks(changed_file_paths: list[str], force_reembed: bool = False) -> 
                 document_id=document_id,
                 file_hash=file_hash,
                 stage="embedding",
-                output={"embedded_chunks": chunks_per_file.get(document_id, 0)},
+                output={"embedded_chunks": len(file_chunks)},
                 metadata={
-                    "embedded_at": datetime.now(UTC).isoformat(),
+                    "embedded_at": embedded_at,
                     "model": ctx.settings.embedding_model,
                 },
             )
-        except ValueError:
-            # Document/hash mismatch, skip
-            pass
+            ctx.manifest.save()  # Checkpoint after each file!
 
-    ctx.manifest.save()
+            total_embedded += len(file_chunks)
+            files_completed += 1
+            logger.info(f"  ✓ Completed: {len(file_chunks)} chunks embedded")
 
-    logger.info(f"Embedding complete: {len(chunks)} chunks from {len(files_to_embed)} files")
+        except Exception as e:
+            logger.error(f"  Failed to embed {document_id}: {e}", exc_info=True)
+            files_failed += 1
+            failed_files.append(file_path)
+            # Continue with next file instead of aborting entire batch
 
-    return {"embedded_chunks": len(chunks), "embedded_files": len(files_to_embed)}
+    logger.info(
+        f"Embedding complete: {total_embedded} chunks from {files_completed}/{len(changed_file_paths)} files"
+    )
+    if files_failed > 0:
+        logger.warning(f"⚠ {files_failed} files failed")
+
+    return {
+        "embedded_chunks": total_embedded,
+        "embedded_files": files_completed,
+        "failed_files": failed_files[:10] if failed_files else [],
+    }
 
 
 def index_embeddings(changed_file_paths: list[str], removed_file_metadata: list[dict]) -> dict:
