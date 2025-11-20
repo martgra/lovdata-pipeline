@@ -52,24 +52,18 @@ def test_extract_articles_from_xml(sample_xml_file):
     assert articles[0].address == "NL/test/§1"
 
 
-def test_chunk_article():
-    """Test chunking an article."""
-    from lovdata_pipeline.domain.services.xml_parsing_service import ParsedArticle
+def test_chunk_article(sample_xml_file):
+    """Test chunking a file."""
+    chunking_service = ChunkingService(target_tokens=512, max_tokens=1000)
 
-    splitter = ChunkingService(max_tokens=1000)
-    article = ParsedArticle(
-        article_id="test-art",
-        content="This is test content",
-        heading="Test Heading",
-        address="NL/test/§1",
+    chunks = chunking_service.chunk_file(
+        sample_xml_file, "test-doc", "test-dataset", "test-hash"
     )
-
-    chunks = splitter.chunk_article(article, "test-doc", "test-dataset")
 
     assert len(chunks) > 0
     assert chunks[0].document_id == "test-doc"
     assert chunks[0].dataset_name == "test-dataset"
-    assert "test content" in chunks[0].content.lower()
+    assert len(chunks[0].content) > 0
 
 
 def test_embed_chunks():
@@ -147,14 +141,12 @@ def test_process_file_success(sample_xml_file, tmp_path):
         return response
     mock_client.embeddings.create = mock_embeddings_create
 
-    # Create services
-    xml_parser = XMLParsingService()
-    chunking_service = ChunkingService(max_tokens=1000)
+    # Create services (no XMLParsingService needed anymore)
+    chunking_service = ChunkingService(target_tokens=512, max_tokens=1000)
     embedding_provider = OpenAIEmbeddingProvider(mock_client, "test-model")
     embedding_service = EmbeddingService(provider=embedding_provider, batch_size=100)
 
     file_processor = FileProcessingService(
-        xml_parser=xml_parser,
         chunking_service=chunking_service,
         embedding_service=embedding_service,
         vector_store=vector_store,
@@ -189,14 +181,12 @@ def test_process_file_handles_errors(tmp_path):
     mock_client = Mock()
     vector_store = ChromaVectorStoreRepository(mock_collection)
 
-    # Create services
-    xml_parser = XMLParsingService()
-    chunking_service = ChunkingService(max_tokens=1000)
+    # Create services (no XMLParsingService needed anymore)
+    chunking_service = ChunkingService(target_tokens=512, max_tokens=1000)
     embedding_provider = OpenAIEmbeddingProvider(mock_client, "test-model")
     embedding_service = EmbeddingService(provider=embedding_provider, batch_size=100)
 
     file_processor = FileProcessingService(
-        xml_parser=xml_parser,
         chunking_service=chunking_service,
         embedding_service=embedding_service,
         vector_store=vector_store,
@@ -241,21 +231,18 @@ def test_process_file_no_articles_fails(tmp_path):
         hash="test-hash",
     )
 
-    # Create services
-    from lovdata_pipeline.domain.services.xml_parsing_service import XMLParsingService
+    # Create services (no XMLParsingService needed anymore)
     from lovdata_pipeline.domain.services.chunking_service import ChunkingService
 
     mock_collection = Mock()
     mock_client = Mock()
     vector_store = ChromaVectorStoreRepository(mock_collection)
 
-    xml_parser = XMLParsingService()
-    chunking_service = ChunkingService(max_tokens=1000)
+    chunking_service = ChunkingService(target_tokens=512, max_tokens=1000)
     embedding_provider = OpenAIEmbeddingProvider(mock_client, "test-model")
     embedding_service = EmbeddingService(provider=embedding_provider, batch_size=100)
 
     file_processor = FileProcessingService(
-        xml_parser=xml_parser,
         chunking_service=chunking_service,
         embedding_service=embedding_service,
         vector_store=vector_store,
@@ -263,7 +250,7 @@ def test_process_file_no_articles_fails(tmp_path):
 
     result = file_processor.process_file(file_info)
 
-    # Should fail when no articles are extracted
+    # Should fail when no chunks are generated
     assert result.success is False
     assert result.chunk_count == 0
-    assert "No articles extracted" in result.error_message
+    assert "No chunks generated" in result.error_message

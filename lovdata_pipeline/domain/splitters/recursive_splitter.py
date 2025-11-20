@@ -1,10 +1,15 @@
 """XML-aware recursive splitter for legal documents.
 
+DEPRECATED: This module is deprecated. Use LovdataChunker from
+lovdata_pipeline.domain.parsers.lovdata_chunker instead.
+
 This module implements a three-tier splitting strategy:
 1. Split at legalP paragraph boundaries (best for semantics)
 2. Split at Norwegian sentence boundaries (when paragraphs are too large)
 3. Hard split by token boundaries (last resort for extremely long sentences)
 """
+
+import warnings
 
 import re
 
@@ -30,6 +35,12 @@ class XMLAwareRecursiveSplitter:
             max_tokens: Maximum tokens per chunk
             encoding: Tiktoken encoding to use
         """
+        warnings.warn(
+            "XMLAwareRecursiveSplitter is deprecated. "
+            "Use LovdataChunker from lovdata_pipeline.domain.parsers.lovdata_chunker instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.max_tokens = max_tokens
         self.token_counter = TokenCounter(encoding_name=encoding)
         # Norwegian sentence regex: period/question/exclamation followed by space and capital

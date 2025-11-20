@@ -13,7 +13,6 @@ from lovdata_pipeline.config.settings import PipelineSettings
 from lovdata_pipeline.domain.services.chunking_service import ChunkingService
 from lovdata_pipeline.domain.services.embedding_service import EmbeddingService
 from lovdata_pipeline.domain.services.file_processing_service import FileProcessingService
-from lovdata_pipeline.domain.services.xml_parsing_service import XMLParsingService
 from lovdata_pipeline.infrastructure.chroma_vector_store import ChromaVectorStoreRepository
 from lovdata_pipeline.infrastructure.openai_embedding_provider import (
     OpenAIEmbeddingProvider,
@@ -34,6 +33,8 @@ def create_pipeline_orchestrator(
     chroma_path: str,
     storage_type: str = "chroma",
     data_dir: str = "./data",
+    chunk_target_tokens: int = 512,
+    chunk_overlap_ratio: float = 0.15,
 ) -> PipelineOrchestrator:
     """Factory function to create a fully configured pipeline orchestrator.
 
@@ -46,6 +47,8 @@ def create_pipeline_orchestrator(
         chroma_path: Path to ChromaDB storage
         storage_type: Storage type ('chroma' or 'jsonl')
         data_dir: Data directory for JSONL storage
+        chunk_target_tokens: Target tokens per chunk (default: 512)
+        chunk_overlap_ratio: Overlap ratio between chunks (default: 0.15)
 
     Returns:
         Configured PipelineOrchestrator instance
@@ -73,13 +76,15 @@ def create_pipeline_orchestrator(
         logger.info(f"Using ChromaDB storage at: {chroma_path}")
 
     # Create domain services
-    xml_parser = XMLParsingService()
-    chunking_service = ChunkingService(max_tokens=chunk_max_tokens)
+    chunking_service = ChunkingService(
+        target_tokens=chunk_target_tokens,
+        max_tokens=chunk_max_tokens,
+        overlap_ratio=chunk_overlap_ratio,
+    )
     embedding_service = EmbeddingService(provider=embedding_provider, batch_size=100)
 
     # Create file processing service
     file_processor = FileProcessingService(
-        xml_parser=xml_parser,
         chunking_service=chunking_service,
         embedding_service=embedding_service,
         vector_store=vector_store,

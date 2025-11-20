@@ -1,7 +1,7 @@
 """File processing service for legal documents.
 
 Responsible for coordinating the complete processing of a single file.
-Single Responsibility: Orchestrate parse -> chunk -> embed -> index for one file.
+Single Responsibility: Orchestrate chunk -> embed -> index for one file.
 """
 
 import logging
@@ -11,7 +11,6 @@ from pathlib import Path
 
 from lovdata_pipeline.domain.services.chunking_service import ChunkingService
 from lovdata_pipeline.domain.services.embedding_service import EmbeddingService
-from lovdata_pipeline.domain.services.xml_parsing_service import XMLParsingService
 from lovdata_pipeline.domain.vector_store import VectorStoreRepository
 
 logger = logging.getLogger(__name__)
@@ -40,12 +39,11 @@ class FileProcessingService:
     """Service for processing individual legal document files.
 
     Single Responsibility: Coordinate the complete processing pipeline
-    for a single file (parse, chunk, embed, index).
+    for a single file (chunk, embed, index).
     """
 
     def __init__(
         self,
-        xml_parser: XMLParsingService,
         chunking_service: ChunkingService,
         embedding_service: EmbeddingService,
         vector_store: VectorStoreRepository,
@@ -53,12 +51,10 @@ class FileProcessingService:
         """Initialize file processing service.
 
         Args:
-            xml_parser: Service for parsing XML files
-            chunking_service: Service for chunking articles
+            chunking_service: Service for chunking XML files
             embedding_service: Service for generating embeddings
             vector_store: Repository for storing vectors
         """
-        self._xml_parser = xml_parser
         self._chunking_service = chunking_service
         self._embedding_service = embedding_service
         self._vector_store = vector_store
@@ -92,46 +88,37 @@ class FileProcessingService:
                     error_message=f"File not found: {file_info.path}",
                 )
 
-            # 2. Parse XML
-            articles = self._xml_parser.parse_file(file_info.path)
-            if not articles:
-                error_msg = f"No articles extracted from {file_info.doc_id}"
+            # 2. Chunk XML file directly
+            all_chunks = self._chunking_service.chunk_file(
+                file_info.path,
+                file_info.doc_id,
+                file_info.dataset,
+                file_info.hash,
+            )
+
+            if not all_chunks:
+                error_msg = f"No chunks generated from {file_info.doc_id}"
                 if warning_callback:
                     warning_callback(error_msg)
                 return FileProcessingResult(success=False, chunk_count=0, error_message=error_msg)
 
-            # 3. Chunk articles
-            all_chunks = []
-            for article in articles:
-                chunks = self._chunking_service.chunk_article(
-                    article,
-                    file_info.doc_id,
-                    file_info.dataset,
-                    file_info.hash,
-                )
-                all_chunks.extend(chunks)
-
-            if not all_chunks:
-                error_msg = f"No chunks generated from {file_info.doc_id}"
-                return FileProcessingResult(success=False, chunk_count=0, error_message=error_msg)
-
             logger.debug(f"  Chunked: {len(all_chunks)} chunks")
 
-            # 4. Embed chunks
+            # 3. Embed chunks
             enriched = self._embedding_service.embed_chunks(
                 all_chunks,
                 progress_callback=progress_callback,
             )
             logger.debug(f"  Embedded: {len(enriched)} chunks")
 
-            # 5. Generate vector IDs
+            # 4. Generate vector IDs
             vector_ids = [f"{file_info.doc_id}_chunk_{i}" for i in range(len(enriched))]
 
             # Set IDs on enriched chunks
             for chunk, vid in zip(enriched, vector_ids, strict=True):
                 chunk.chunk_id = vid
 
-            # 6. Index in vector store (upsert = replace old if exists)
+            # 5. Index in vector store (upsert = replace old if exists)
             self._vector_store.upsert_chunks(enriched)
             logger.debug(f"  Indexed: {len(vector_ids)} vectors")
 

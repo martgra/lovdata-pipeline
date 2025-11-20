@@ -1,5 +1,9 @@
 """XML parsing service for legal documents.
 
+DEPRECATED: This module is deprecated. The new LovdataChunker from
+lovdata_pipeline.domain.parsers.lovdata_chunker handles XML parsing
+and chunking in a single pass, with better structure preservation.
+
 Responsible for parsing XML files and extracting legal articles.
 Single Responsibility: XML parsing and article extraction.
 """
