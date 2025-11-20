@@ -9,7 +9,6 @@ from unittest.mock import Mock, patch
 import pytest
 
 from lovdata_pipeline.domain.services.chunking_service import ChunkingService
-from lovdata_pipeline.domain.services.xml_parsing_service import XMLParsingService
 
 
 @pytest.fixture
@@ -38,18 +37,6 @@ def sample_xml_file(tmp_path):
 </html>"""
     xml_file.write_text(xml_content)
     return xml_file
-
-
-def test_extract_articles_from_xml(sample_xml_file):
-    """Test extracting articles from XML."""
-    parser = XMLParsingService()
-    articles = parser.parse_file(sample_xml_file)
-
-    assert len(articles) == 2
-    assert articles[0].article_id == "art1"
-    assert "Test Article" in articles[0].heading
-    assert "test article" in articles[0].content.lower()
-    assert articles[0].address == "NL/test/§1"
 
 
 def test_chunk_article(sample_xml_file):

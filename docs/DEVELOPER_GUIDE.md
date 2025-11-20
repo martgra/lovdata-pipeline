@@ -86,20 +86,18 @@ lovdata_pipeline/
 │   ├── vector_store.py          # Protocol interface
 │   │
 │   ├── services/            # Domain services
-│   │   ├── xml_parsing_service.py
 │   │   ├── chunking_service.py
 │   │   ├── embedding_service.py
 │   │   └── file_processing_service.py
 │   │
 │   ├── parsers/
-│   │   └── xml_chunker.py   # XML parsing logic
+│   │   └── lovdata_chunker.py   # Unified XML parsing and chunking
 │   └── splitters/
-│       ├── recursive_splitter.py  # Chunking algorithm
-│       └── token_counter.py       # Token counting
+│       └── token_counter.py     # Token counting
 │
 ├── infrastructure/          # External service implementations
-│   ├── chroma_client.py     # ChromaDB wrapper (memory/persistent/client)
 │   ├── chroma_vector_store.py   # VectorStoreRepository implementation
+│   ├── jsonl_vector_store.py    # JSONL-based vector store
 │   └── openai_embedding_provider.py  # EmbeddingProvider implementation
 │
 ├── orchestration/
@@ -112,11 +110,11 @@ tests/
 ├── unit/                    # Fast, isolated tests
 │   ├── state_test.py
 │   ├── lovlig_test.py
-│   ├── xml_chunker_test.py
-│   ├── recursive_splitter_test.py
+│   ├── lovdata_chunker_test.py
 │   ├── token_counter_test.py
 │   ├── models_test.py
-│   └── chroma_modes_test.py
+│   ├── settings_test.py
+│   └── jsonl_vector_store_test.py
 │
 └── integration/             # End-to-end tests
     └── pipeline_test.py     # Service integration tests
@@ -124,19 +122,18 @@ tests/
 
 ### Key Components
 
-| Component                                     | Purpose               | Responsibility                           |
-| --------------------------------------------- | --------------------- | ---------------------------------------- |
-| `cli.py`                                      | CLI interface         | User commands and argument parsing       |
-| `pipeline.py`                                 | Factory               | Dependency injection and service wiring  |
-| `orchestration/pipeline_orchestrator.py`      | Workflow coordination | Sync → identify → process → cleanup      |
-| `domain/services/file_processing_service.py`  | File processing       | Parse → chunk → embed → index per file   |
-| `domain/services/xml_parsing_service.py`      | XML parsing           | Extract articles from XML                |
-| `domain/services/chunking_service.py`         | Chunking              | Split articles into token-limited chunks |
-| `domain/services/embedding_service.py`        | Embedding             | Generate embeddings via provider         |
-| `infrastructure/openai_embedding_provider.py` | OpenAI integration    | Concrete embedding provider              |
-| `infrastructure/chroma_vector_store.py`       | ChromaDB integration  | Concrete vector store implementation     |
-| `state.py`                                    | State tracking        | Tracks processed/failed documents        |
-| `lovlig.py`                                   | Lovlig wrapper        | Syncs files, detects changes             |
+| Component                                     | Purpose               | Responsibility                          |
+| --------------------------------------------- | --------------------- | --------------------------------------- |
+| `cli.py`                                      | CLI interface         | User commands and argument parsing      |
+| `pipeline.py`                                 | Factory               | Dependency injection and service wiring |
+| `orchestration/pipeline_orchestrator.py`      | Workflow coordination | Sync → identify → process → cleanup     |
+| `domain/services/file_processing_service.py`  | File processing       | Parse → chunk → embed → index per file  |
+| `domain/services/chunking_service.py`         | Chunking              | Parse XML and split into chunks         |
+| `domain/services/embedding_service.py`        | Embedding             | Generate embeddings via provider        |
+| `infrastructure/openai_embedding_provider.py` | OpenAI integration    | Concrete embedding provider             |
+| `infrastructure/chroma_vector_store.py`       | ChromaDB integration  | Concrete vector store implementation    |
+| `state.py`                                    | State tracking        | Tracks processed/failed documents       |
+| `lovlig.py`                                   | Lovlig wrapper        | Syncs files, detects changes            |
 
 ---
 
@@ -176,7 +173,6 @@ def create_pipeline_orchestrator(
     vector_store = ChromaVectorStoreRepository(collection)
 
     # Create domain services
-    xml_parser = XMLParsingService()
     chunking_service = ChunkingService(max_tokens=chunk_max_tokens)
     embedding_service = EmbeddingService(provider=embedding_provider)
 
@@ -357,9 +353,10 @@ class CustomSplitter:
 Use in `pipeline.py`:
 
 ```python
-def chunk_article(article, ...):
-    splitter = CustomSplitter()  # Instead of XMLAwareRecursiveSplitter
-    return splitter.split_article(article)
+def chunk_article(xml_path, ...):
+    # Custom chunker implementation
+    chunker = CustomChunker()
+    return chunker.chunk(xml_path)
 ```
 
 ### Adding a New Vector Database
@@ -381,8 +378,8 @@ class PineconeClient:
 
 ```python
 def run_pipeline(config):
-    # Replace ChromaClient with PineconeClient
-    vector_db = PineconeClient(...)
+    # Replace ChromaVectorStoreRepository with custom implementation
+    vector_store = PineconeVectorStore(...)
 ```
 
 ### Adding Pre/Post Processing

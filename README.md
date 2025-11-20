@@ -35,10 +35,9 @@ One command. Atomic per-file processing. Simple state tracking.
 For each file:
 
 1. **Sync** - Download from Lovdata (via lovlig library)
-2. **Parse** - Extract articles from XML (XMLParsingService)
-3. **Chunk** - Split into token-sized pieces (ChunkingService)
-4. **Embed** - Generate embeddings via OpenAI (EmbeddingService)
-5. **Index** - Store in ChromaDB (VectorStore)
+2. **Parse & Chunk** - Extract and split articles (LovdataChunker)
+3. **Embed** - Generate embeddings via OpenAI (EmbeddingService)
+4. **Index** - Store in ChromaDB (VectorStore)
 
 Atomic processing: each file completes fully before moving to the next.
 

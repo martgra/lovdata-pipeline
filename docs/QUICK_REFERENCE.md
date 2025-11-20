@@ -187,7 +187,8 @@ lovdata-pipeline/
 │   │   ├── parsers/
 │   │   └── splitters/
 │   └── infrastructure/          # External systems
-│       └── chroma_client.py
+│       ├── chroma_vector_store.py
+│       └── jsonl_vector_store.py
 │
 └── tests/
     ├── unit/
