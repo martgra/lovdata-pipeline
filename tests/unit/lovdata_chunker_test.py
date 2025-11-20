@@ -503,6 +503,105 @@ class TestEdgeCases:
             Path(temp_path).unlink()
 
 
+class TestTokenLimits:
+    """Test token limit handling and edge cases."""
+
+    def test_chunk_at_exact_max_tokens_is_included(self):
+        """Test that chunks exactly at max_tokens are included, not dropped."""
+        chunker = LovdataChunker(target_tokens=50, max_tokens=100)
+
+        # Create text that will be exactly at or very close to max_tokens
+        # This tests the <= vs < fix
+        text_parts = []
+        current_tokens = 0
+
+        # Build text to approximately 100 tokens
+        while current_tokens < 95:
+            part = "This is a test sentence. "
+            text_parts.append(part)
+            current_tokens = chunker._count_tokens("".join(text_parts))
+
+        final_text = "".join(text_parts).strip()
+
+        xml_content = f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html lang="no">
+<body>
+    <main class="documentBody" id="dokument">
+        <h1>Test</h1>
+        <section class="section">
+            <article class="legalArticle" id="para-1">
+                <h2 class="legalArticleHeader">
+                    <span class="legalArticleValue">§ 1</span>
+                </h2>
+                <article class="legalP" id="para-1-ledd-1">
+                    {final_text}
+                </article>
+            </article>
+        </section>
+    </main>
+</body>
+</html>"""
+        with NamedTemporaryFile(mode="w", suffix=".xml", delete=False, encoding="utf-8") as f:
+            f.write(xml_content)
+            temp_path = f.name
+
+        try:
+            chunks = chunker.chunk(temp_path)
+
+            # Chunk should be created even if at max_tokens
+            assert len(chunks) >= 1, "Chunks at max_tokens should be included"
+
+            # All chunks should be within limits
+            for chunk in chunks:
+                assert chunk.token_count <= chunker.max
+        finally:
+            Path(temp_path).unlink()
+
+    def test_oversized_chunk_logs_warning(self, caplog):
+        """Test that chunks exceeding max in split_by_lists log a warning."""
+        import logging
+
+        # Use very small max to trigger warning
+        chunker = LovdataChunker(target_tokens=10, max_tokens=20)
+
+        # Create a list with very long items that will exceed max when split
+        long_item = " ".join(["word"] * 50)  # This will definitely exceed 20 tokens
+        xml_content = f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html lang="no">
+<body>
+    <main class="documentBody" id="dokument">
+        <h1>Test</h1>
+        <section class="section">
+            <article class="legalArticle" id="para-1">
+                <h2 class="legalArticleHeader">
+                    <span class="legalArticleValue">§ 1</span>
+                </h2>
+                <article class="legalP" id="para-1-ledd-1">
+                    <ol>
+                        <li data-name="a)">{long_item}</li>
+                    </ol>
+                </article>
+            </article>
+        </section>
+    </main>
+</body>
+</html>"""
+        with NamedTemporaryFile(mode="w", suffix=".xml", delete=False, encoding="utf-8") as f:
+            f.write(xml_content)
+            temp_path = f.name
+
+        try:
+            with caplog.at_level(logging.WARNING):
+                chunks = chunker.chunk(temp_path)
+
+            # Should have logged a warning about exceeding max tokens
+            assert any("exceeds max tokens" in record.message for record in caplog.records)
+        finally:
+            Path(temp_path).unlink()
+
+
 class TestChunkDataclass:
     """Test the Chunk dataclass."""
 

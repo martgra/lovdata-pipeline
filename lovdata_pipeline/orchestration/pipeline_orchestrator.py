@@ -189,7 +189,9 @@ class PipelineOrchestrator:
             # When forcing, process ALL files (not just changed)
             all_files = lovlig.get_all_files()
             to_process = [self._convert_to_file_info(f) for f in all_files]
+            total_available = len(all_files)
         else:
+            total_available = len(changed)
             for f in changed:
                 if not state.is_processed(f["doc_id"], f["hash"]):
                     to_process.append(self._convert_to_file_info(f))
@@ -200,8 +202,10 @@ class PipelineOrchestrator:
             to_process = to_process[:limit]
             logger.info(f"Limit applied: processing {len(to_process)} of {original_count} files")
 
+        # Calculate skipped count correctly
+        skipped = total_available - len(to_process)
         logger.debug(
-            f"Processing {len(to_process)} files, skipped {len(changed) - len(to_process)}"
+            f"Processing {len(to_process)} files, skipped {skipped}"
         )
         progress_tracker.end_stage("identify")
 

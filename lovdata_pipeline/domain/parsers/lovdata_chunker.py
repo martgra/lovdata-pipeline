@@ -7,12 +7,15 @@ Three-tier fallback strategy:
 3. Simple laws: main → legalP
 """
 
+import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
 
 import tiktoken
 from lxml import etree
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -366,7 +369,7 @@ class LovdataChunker:
         for idx, part in enumerate(parts, 1):
             tokens = self._count_tokens(part)
 
-            if tokens < self.max:
+            if tokens <= self.max:
                 chunk = Chunk(
                     chunk_id=f"{paragraph_ref}-ledd{ledd_num}-part{idx}",
                     text=part,
@@ -380,6 +383,12 @@ class LovdataChunker:
                     },
                 )
                 chunks.append(chunk)
+            else:
+                # Chunk exceeds max tokens - log warning and skip
+                logger.warning(
+                    f"Chunk {paragraph_ref}-ledd{ledd_num}-part{idx} exceeds max tokens "
+                    f"({tokens} > {self.max}), skipping"
+                )
 
         return chunks
 

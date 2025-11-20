@@ -244,10 +244,10 @@ def migrate(
                             embedded_at=result["metadatas"][i].get("embedded_at", ""),
                         )
                         chunks.append(chunk)
-                    except Exception:
+                    except Exception as e:
                         console.print(
-                            "[yellow]Warning: Failed to convert chunk"
-                            " {result['ids'][i]}: {e}[/yellow]"
+                            f"[yellow]Warning: Failed to convert chunk"
+                            f" {result['ids'][i]}: {e}[/yellow]"
                         )
 
                 # Write to target
@@ -304,7 +304,6 @@ def status(data_dir: str = typer.Option("./data", help="Data directory")):
         console.print("[bold]Pipeline Status[/bold]")
         console.print(f"  Processed: {stats['processed']} documents")
         console.print(f"  Failed: {stats['failed']} documents")
-        console.print(f"  Indexed: {stats['total_vectors']} vectors")
 
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
