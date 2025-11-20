@@ -1,5 +1,9 @@
 """XML-aware chunker for Lovdata legal documents.
 
+DEPRECATED: This module is deprecated. Use LovdataChunker from
+lovdata_pipeline.domain.parsers.lovdata_chunker instead, which provides
+improved chunking with overlapping chunks optimized for RAG.
+
 This module provides functionality to parse Lovdata XML documents and extract
 legal articles with their structure preserved (paragraphs, headings, metadata).
 """
