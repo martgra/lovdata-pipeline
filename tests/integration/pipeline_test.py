@@ -207,3 +207,63 @@ def test_process_file_handles_errors(tmp_path):
     assert result.success is False
     assert result.chunk_count == 0
     assert result.error_message is not None
+
+
+def test_process_file_no_articles_fails(tmp_path):
+    """Test that files with no extractable articles are marked as failed."""
+    from lovdata_pipeline.domain.services.file_processing_service import FileInfo, FileProcessingService
+    from lovdata_pipeline.domain.services.embedding_service import EmbeddingService
+    from lovdata_pipeline.infrastructure.openai_embedding_provider import OpenAIEmbeddingProvider
+    from lovdata_pipeline.infrastructure.chroma_vector_store import ChromaVectorStoreRepository
+
+    # Create an XML file with no extractable articles
+    xml_content = """<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html lang="no">
+<head><title>Empty Law</title></head>
+<body>
+    <main class="documentBody" id="dokument">
+        <h1>Law with No Content</h1>
+        <article class="changesToParent">
+            This is metadata, not a legal article.
+        </article>
+    </main>
+</body>
+</html>"""
+
+    xml_file = tmp_path / "empty.xml"
+    xml_file.write_text(xml_content, encoding="utf-8")
+
+    file_info = FileInfo(
+        path=xml_file,
+        doc_id="empty-doc",
+        dataset="test-dataset",
+        hash="test-hash",
+    )
+
+    # Create services
+    from lovdata_pipeline.domain.services.xml_parsing_service import XMLParsingService
+    from lovdata_pipeline.domain.services.chunking_service import ChunkingService
+
+    mock_collection = Mock()
+    mock_client = Mock()
+    vector_store = ChromaVectorStoreRepository(mock_collection)
+
+    xml_parser = XMLParsingService()
+    chunking_service = ChunkingService(max_tokens=1000)
+    embedding_provider = OpenAIEmbeddingProvider(mock_client, "test-model")
+    embedding_service = EmbeddingService(provider=embedding_provider, batch_size=100)
+
+    file_processor = FileProcessingService(
+        xml_parser=xml_parser,
+        chunking_service=chunking_service,
+        embedding_service=embedding_service,
+        vector_store=vector_store,
+    )
+
+    result = file_processor.process_file(file_info)
+
+    # Should fail when no articles are extracted
+    assert result.success is False
+    assert result.chunk_count == 0
+    assert "No articles extracted" in result.error_message

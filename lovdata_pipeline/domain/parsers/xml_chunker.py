@@ -50,6 +50,11 @@ class LovdataXMLChunker:
     def extract_articles(self) -> list[LegalArticle]:
         """Extract all legal articles from the XML document.
 
+        The extraction follows a three-tier fallback strategy:
+        1. Standard laws: Extract legalArticle elements (most modern laws)
+        2. Change laws: Extract legalP elements within section elements (endringslover)
+        3. Simple laws: Extract legalP elements directly under main (very old laws)
+
         Returns:
             List of LegalArticle objects
 
@@ -65,11 +70,21 @@ class LovdataXMLChunker:
 
         articles = []
 
-        # Find all legalArticle elements
+        # Find all legalArticle elements (standard laws)
         for article_elem in root.xpath('//article[@class="legalArticle"]'):
             article = self._parse_article(article_elem)
             if article:
                 articles.append(article)
+
+        # If no legalArticle elements found, try extracting legalP elements
+        # directly under sections (change laws/endringslover)
+        if not articles:
+            articles = self._extract_change_law_articles(root)
+
+        # If still no articles, try extracting legalP elements directly
+        # under main (very old/simple laws without section structure)
+        if not articles:
+            articles = self._extract_simple_law_articles(root)
 
         return articles
 
@@ -178,3 +193,101 @@ class LovdataXMLChunker:
                 texts.append(text.strip())
 
         return " ".join(texts)
+
+    def _extract_change_law_articles(self, root: ET._Element) -> list[LegalArticle]:
+        """Extract articles from change laws (endringslover).
+
+        Change laws have legalP elements directly under section elements,
+        not wrapped in legalArticle elements.
+
+        Args:
+            root: The root XML element
+
+        Returns:
+            List of LegalArticle objects extracted from legalP elements
+        """
+        articles = []
+
+        # Find all sections with legalP children
+        for section_elem in root.xpath('//section[@class="section"]'):
+            # Get section heading
+            section_heading_elem = section_elem.find(".//h2")
+            section_heading = (
+                self._get_text_recursive(section_heading_elem).strip()
+                if section_heading_elem is not None
+                else ""
+            )
+
+            # Get section URL for context
+            section_url = section_elem.get("data-lovdata-URL", "")
+
+            # Extract legalP elements directly under this section
+            for legal_p_elem in section_elem.xpath('.//article[@class="legalP"]'):
+                # Use the section ID + legalP ID as article ID
+                legal_p_id = legal_p_elem.get("id", "")
+                article_id = legal_p_id if legal_p_id else f"{section_elem.get('id', 'unknown')}-p"
+
+                # Extract text content
+                content = self._get_text_recursive(legal_p_elem).strip()
+
+                if content:
+                    article = LegalArticle(
+                        article_id=article_id,
+                        content=content,
+                        paragraphs=[content],  # Single paragraph for legalP
+                        section_heading=section_heading,
+                        absolute_address=section_url,
+                        document_id=self.document_id,
+                    )
+                    articles.append(article)
+
+        return articles
+
+    def _extract_simple_law_articles(self, root: ET._Element) -> list[LegalArticle]:
+        """Extract articles from very simple/old laws.
+
+        Some very old laws have legalP elements directly under main
+        without any section or legalArticle wrapper.
+
+        Args:
+            root: The root XML element
+
+        Returns:
+            List of LegalArticle objects extracted from direct legalP elements
+        """
+        articles = []
+
+        # Get the main document title for context
+        main_elem = root.find('.//main[@class="documentBody"]')
+        if main_elem is None:
+            return articles
+
+        # Get document title from h1
+        doc_title_elem = main_elem.find(".//h1")
+        doc_title = (
+            self._get_text_recursive(doc_title_elem).strip() if doc_title_elem is not None else ""
+        )
+
+        # Get document URL for context
+        doc_url = main_elem.get("data-lovdata-URL", "")
+
+        # Extract legalP elements directly under main (not nested in sections)
+        for idx, legal_p_elem in enumerate(main_elem.xpath('./article[@class="legalP"]'), start=1):
+            # Use index-based ID since these simple laws often don't have IDs
+            legal_p_id = legal_p_elem.get("id", f"ledd-{idx}")
+
+            # Extract text content
+            content = self._get_text_recursive(legal_p_elem).strip()
+
+            if content:
+                article = LegalArticle(
+                    article_id=legal_p_id,
+                    content=content,
+                    paragraphs=[content],  # Single paragraph
+                    section_heading=doc_title,  # Use document title as heading
+                    absolute_address=doc_url,
+                    document_id=self.document_id,
+                )
+                articles.append(article)
+
+        return articles

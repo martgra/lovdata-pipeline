@@ -35,12 +35,15 @@ class XMLAwareRecursiveSplitter:
         # Norwegian sentence regex: period/question/exclamation followed by space and capital
         self.sentence_pattern = re.compile(r"(?<=[.!?])\s+(?=[A-ZÆØÅ])")
 
-    def split_article(self, article: LegalArticle, dataset_name: str = "") -> list[ChunkMetadata]:
+    def split_article(
+        self, article: LegalArticle, dataset_name: str = "", source_hash: str = ""
+    ) -> list[ChunkMetadata]:
         """Split a legal article into chunks.
 
         Args:
             article: LegalArticle to split
             dataset_name: Name of the dataset (e.g., 'gjeldende-lover.tar.bz2')
+            source_hash: SHA256 hash of source file
 
         Returns:
             List of ChunkMetadata objects
@@ -59,31 +62,33 @@ class XMLAwareRecursiveSplitter:
                     section_heading=article.section_heading,
                     absolute_address=article.absolute_address,
                     split_reason="none",
+                    source_hash=source_hash,
                 )
             ]
 
         # Try paragraph-level splitting first
         if article.paragraphs:
-            chunks = self._split_by_paragraphs(article, dataset_name)
+            chunks = self._split_by_paragraphs(article, dataset_name, source_hash)
             if chunks:
                 return chunks
 
         # Fall back to sentence splitting
-        chunks = self._split_by_sentences(article, dataset_name)
+        chunks = self._split_by_sentences(article, dataset_name, source_hash)
         if chunks:
             return chunks
 
         # Last resort: hard token split
-        return self._split_by_tokens(article, dataset_name)
+        return self._split_by_tokens(article, dataset_name, source_hash)
 
     def _split_by_paragraphs(
-        self, article: LegalArticle, dataset_name: str = ""
+        self, article: LegalArticle, dataset_name: str = "", source_hash: str = ""
     ) -> list[ChunkMetadata]:
         """Split article by grouping legalP paragraphs.
 
         Args:
             article: LegalArticle to split
             dataset_name: Name of the dataset
+            source_hash: SHA256 hash of source file
 
         Returns:
             List of ChunkMetadata objects or empty list if splitting fails
@@ -103,7 +108,13 @@ class XMLAwareRecursiveSplitter:
                     content = " ".join(current_paragraphs)
                     chunks.append(
                         self._create_chunk_metadata(
-                            article, content, chunk_index, "paragraph", current_tokens
+                            article,
+                            content,
+                            chunk_index,
+                            "paragraph",
+                            current_tokens,
+                            dataset_name,
+                            source_hash,
                         )
                     )
                     chunk_index += 1
@@ -112,7 +123,7 @@ class XMLAwareRecursiveSplitter:
 
                 # Split this large paragraph by sentences
                 para_chunks = self._split_text_by_sentences(
-                    paragraph, article, chunk_index, dataset_name
+                    paragraph, article, chunk_index, dataset_name, source_hash
                 )
                 chunks.extend(para_chunks)
                 chunk_index += len(para_chunks)
@@ -125,7 +136,13 @@ class XMLAwareRecursiveSplitter:
                     content = " ".join(current_paragraphs)
                     chunks.append(
                         self._create_chunk_metadata(
-                            article, content, chunk_index, "paragraph", current_tokens
+                            article,
+                            content,
+                            chunk_index,
+                            "paragraph",
+                            current_tokens,
+                            dataset_name,
+                            source_hash,
                         )
                     )
                     chunk_index += 1
@@ -143,28 +160,40 @@ class XMLAwareRecursiveSplitter:
             content = " ".join(current_paragraphs)
             chunks.append(
                 self._create_chunk_metadata(
-                    article, content, chunk_index, "paragraph", current_tokens, dataset_name
+                    article,
+                    content,
+                    chunk_index,
+                    "paragraph",
+                    current_tokens,
+                    dataset_name,
+                    source_hash,
                 )
             )
 
         return chunks
 
     def _split_by_sentences(
-        self, article: LegalArticle, dataset_name: str = ""
+        self, article: LegalArticle, dataset_name: str = "", source_hash: str = ""
     ) -> list[ChunkMetadata]:
         """Split article by Norwegian sentence boundaries.
 
         Args:
             article: LegalArticle to split
             dataset_name: Name of the dataset
+            source_hash: SHA256 hash of source file
 
         Returns:
             List of ChunkMetadata objects
         """
-        return self._split_text_by_sentences(article.content, article, 0, dataset_name)
+        return self._split_text_by_sentences(article.content, article, 0, dataset_name, source_hash)
 
     def _split_text_by_sentences(
-        self, text: str, article: LegalArticle, start_index: int, dataset_name: str = ""
+        self,
+        text: str,
+        article: LegalArticle,
+        start_index: int,
+        dataset_name: str = "",
+        source_hash: str = "",
     ) -> list[ChunkMetadata]:
         """Split text by sentence boundaries.
 
@@ -173,6 +202,7 @@ class XMLAwareRecursiveSplitter:
             article: Source article for metadata
             start_index: Starting chunk index
             dataset_name: Name of the dataset
+            source_hash: SHA256 hash of source file
 
         Returns:
             List of ChunkMetadata objects
@@ -201,7 +231,13 @@ class XMLAwareRecursiveSplitter:
                     content = " ".join(current_sentences)
                     chunks.append(
                         self._create_chunk_metadata(
-                            article, content, chunk_index, "sentence", current_tokens, dataset_name
+                            article,
+                            content,
+                            chunk_index,
+                            "sentence",
+                            current_tokens,
+                            dataset_name,
+                            source_hash,
                         )
                     )
                     chunk_index += 1
@@ -210,7 +246,7 @@ class XMLAwareRecursiveSplitter:
 
                 # Hard split this sentence
                 sent_chunks = self._split_text_by_tokens(
-                    sentence, article, chunk_index, dataset_name
+                    sentence, article, chunk_index, dataset_name, source_hash
                 )
                 chunks.extend(sent_chunks)
                 chunk_index += len(sent_chunks)
@@ -223,7 +259,13 @@ class XMLAwareRecursiveSplitter:
                     content = " ".join(current_sentences)
                     chunks.append(
                         self._create_chunk_metadata(
-                            article, content, chunk_index, "sentence", current_tokens, dataset_name
+                            article,
+                            content,
+                            chunk_index,
+                            "sentence",
+                            current_tokens,
+                            dataset_name,
+                            source_hash,
                         )
                     )
                     chunk_index += 1
@@ -241,28 +283,40 @@ class XMLAwareRecursiveSplitter:
             content = " ".join(current_sentences)
             chunks.append(
                 self._create_chunk_metadata(
-                    article, content, chunk_index, "sentence", current_tokens, dataset_name
+                    article,
+                    content,
+                    chunk_index,
+                    "sentence",
+                    current_tokens,
+                    dataset_name,
+                    source_hash,
                 )
             )
 
         return chunks
 
     def _split_by_tokens(
-        self, article: LegalArticle, dataset_name: str = ""
+        self, article: LegalArticle, dataset_name: str = "", source_hash: str = ""
     ) -> list[ChunkMetadata]:
         """Hard split article by token boundaries (last resort).
 
         Args:
             article: LegalArticle to split
             dataset_name: Name of the dataset
+            source_hash: SHA256 hash of source file
 
         Returns:
             List of ChunkMetadata objects
         """
-        return self._split_text_by_tokens(article.content, article, 0, dataset_name)
+        return self._split_text_by_tokens(article.content, article, 0, dataset_name, source_hash)
 
     def _split_text_by_tokens(
-        self, text: str, article: LegalArticle, start_index: int, dataset_name: str = ""
+        self,
+        text: str,
+        article: LegalArticle,
+        start_index: int,
+        dataset_name: str = "",
+        source_hash: str = "",
     ) -> list[ChunkMetadata]:
         """Hard split text by token boundaries.
 
@@ -271,6 +325,7 @@ class XMLAwareRecursiveSplitter:
             article: Source article for metadata
             start_index: Starting chunk index
             dataset_name: Name of the dataset
+            source_hash: SHA256 hash of source file
 
         Returns:
             List of ChunkMetadata objects
@@ -282,7 +337,13 @@ class XMLAwareRecursiveSplitter:
             token_count = self.token_counter.count_tokens(chunk_text)
             chunks.append(
                 self._create_chunk_metadata(
-                    article, chunk_text, start_index + i, "token", token_count, dataset_name
+                    article,
+                    chunk_text,
+                    start_index + i,
+                    "token",
+                    token_count,
+                    dataset_name,
+                    source_hash,
                 )
             )
 
@@ -296,6 +357,7 @@ class XMLAwareRecursiveSplitter:
         split_reason: SplitReason,
         token_count: int | None = None,
         dataset_name: str = "",
+        source_hash: str = "",
     ) -> ChunkMetadata:
         """Create a ChunkMetadata object.
 
@@ -306,6 +368,7 @@ class XMLAwareRecursiveSplitter:
             split_reason: Reason for splitting
             token_count: Precomputed token count (if None, will compute)
             dataset_name: Name of the dataset
+            source_hash: SHA256 hash of source file
 
         Returns:
             ChunkMetadata object
@@ -326,4 +389,5 @@ class XMLAwareRecursiveSplitter:
             absolute_address=article.absolute_address,
             split_reason=split_reason,
             parent_chunk_id=base_id if chunk_index > 0 else None,
+            source_hash=source_hash,
         )

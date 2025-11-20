@@ -27,6 +27,7 @@ class PipelineConfig:
     data_dir: Path
     dataset_filter: str
     force: bool = False
+    limit: int | None = None  # Limit number of files to process (for testing)
 
 
 @dataclass
@@ -94,7 +95,9 @@ class PipelineOrchestrator:
         self._validate_lovlig_state(lovlig)
 
         # Stage 2: Identify files to process
-        to_process, removed = self._identify_files(lovlig, state, config.force, progress_tracker)
+        to_process, removed = self._identify_files(
+            lovlig, state, config.force, progress_tracker, config.limit
+        )
 
         # Stage 3: Process files
         processed, failed = self._process_files(to_process, state, progress_tracker)
@@ -102,9 +105,12 @@ class PipelineOrchestrator:
         # Stage 4: Clean up removed files
         removed_count = self._cleanup_removed_files(removed, state, progress_tracker)
 
-        # Show summary
-        summary = state.stats()
-        summary["removed"] = removed_count
+        # Show summary (use counts from this run, not cumulative state)
+        summary = {
+            "processed": processed,
+            "failed": failed,
+            "removed": removed_count,
+        }
         progress_tracker.show_summary(summary)
 
         return PipelineResult(
@@ -158,8 +164,20 @@ class PipelineOrchestrator:
         state: ProcessingState,
         force: bool,
         progress_tracker: ProgressTracker,
+        limit: int | None = None,
     ) -> tuple[list[FileInfo], list[dict]]:
-        """Identify files to process and removed files."""
+        """Identify files to process and removed files.
+
+        Args:
+            lovlig: Lovlig client instance
+            state: Processing state tracker
+            force: Whether to force reprocessing
+            progress_tracker: Progress tracker instance
+            limit: Optional limit on number of files to process
+
+        Returns:
+            Tuple of (files to process, removed files)
+        """
         progress_tracker.start_stage("identify", "Identifying files")
 
         changed = lovlig.get_changed_files()
@@ -168,11 +186,19 @@ class PipelineOrchestrator:
         # Filter already processed (unless force)
         to_process = []
         if force:
-            to_process = [self._convert_to_file_info(f) for f in changed]
+            # When forcing, process ALL files (not just changed)
+            all_files = lovlig.get_all_files()
+            to_process = [self._convert_to_file_info(f) for f in all_files]
         else:
             for f in changed:
                 if not state.is_processed(f["doc_id"], f["hash"]):
                     to_process.append(self._convert_to_file_info(f))
+
+        # Apply limit if specified
+        if limit is not None and limit > 0:
+            original_count = len(to_process)
+            to_process = to_process[:limit]
+            logger.info(f"Limit applied: processing {len(to_process)} of {original_count} files")
 
         logger.debug(
             f"Processing {len(to_process)} files, skipped {len(changed) - len(to_process)}"
@@ -227,11 +253,7 @@ class PipelineOrchestrator:
 
                 # Update state based on result
                 if result.success:
-                    # Generate vector IDs for state tracking
-                    vector_ids = [
-                        f"{file_info.doc_id}_chunk_{i}" for i in range(result.chunk_count)
-                    ]
-                    state.mark_processed(file_info.doc_id, file_info.hash, vector_ids)
+                    state.mark_processed(file_info.doc_id, file_info.hash)
                     state.save()
                     processed += 1
                     progress_tracker.log_success(file_info.doc_id, result.chunk_count)
@@ -269,17 +291,18 @@ class PipelineOrchestrator:
 
         for r in removed:
             doc_id = r["doc_id"]
-            vectors = state.get_vectors(doc_id)
 
-            if vectors:
-                self._vector_store.delete_by_document_id(vectors)
-                logger.debug(f"Deleted {len(vectors)} vectors for {doc_id}")
-                removed_count += 1
-            else:
-                progress_tracker.log_warning(
-                    f"Document {doc_id} removed but not in state. "
-                    "Ghost vectors may remain in vector store."
-                )
+            # Delete all chunks for this document using metadata filter
+            try:
+                deleted = self._vector_store.delete_by_document_id(doc_id)
+                if deleted > 0:
+                    logger.debug(f"Deleted {deleted} chunks for {doc_id}")
+                    removed_count += 1
+                else:
+                    # Document was tracked but had no vectors (maybe never fully processed)
+                    logger.debug(f"No chunks found for {doc_id}")
+            except Exception as e:
+                progress_tracker.log_warning(f"Failed to delete chunks for {doc_id}: {e}")
 
             state.remove(doc_id)
 

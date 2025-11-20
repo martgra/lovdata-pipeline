@@ -14,12 +14,15 @@ class ProcessingState:
     State structure:
     {
         "processed": {
-            "doc-id": {"hash": "abc123", "vectors": ["v1", "v2"], "at": "2025-11-19T..."},
+            "doc-id": {"hash": "abc123", "at": "2025-11-19T..."},
         },
         "failed": {
             "doc-id": {"hash": "abc123", "error": "...", "at": "2025-11-19T..."}
         }
     }
+
+    Note: We don't track vector IDs anymore. On failure, we delete all chunks
+    by document_id metadata filter and reprocess from scratch.
     """
 
     def __init__(self, state_file: Path):
@@ -54,11 +57,10 @@ class ProcessingState:
             return False
         return self.state["processed"][doc_id]["hash"] == file_hash
 
-    def mark_processed(self, doc_id: str, file_hash: str, vector_ids: list[str]):
+    def mark_processed(self, doc_id: str, file_hash: str):
         """Mark document as successfully processed."""
         self.state["processed"][doc_id] = {
             "hash": file_hash,
-            "vectors": vector_ids,
             "at": datetime.now(UTC).isoformat(),
         }
         self.state["failed"].pop(doc_id, None)
@@ -71,10 +73,6 @@ class ProcessingState:
             "at": datetime.now(UTC).isoformat(),
         }
 
-    def get_vectors(self, doc_id: str) -> list[str] | None:
-        """Get vector IDs for a document."""
-        return self.state["processed"].get(doc_id, {}).get("vectors")
-
     def remove(self, doc_id: str):
         """Remove document from state."""
         self.state["processed"].pop(doc_id, None)
@@ -85,5 +83,4 @@ class ProcessingState:
         return {
             "processed": len(self.state["processed"]),
             "failed": len(self.state["failed"]),
-            "total_vectors": sum(len(d["vectors"]) for d in self.state["processed"].values()),
         }

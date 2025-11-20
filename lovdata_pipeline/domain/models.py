@@ -116,6 +116,7 @@ class ChunkMetadata(BaseModel):
     parent_chunk_id: str | None = Field(
         default=None, description="Parent chunk ID if this is a sub-chunk"
     )
+    source_hash: str = Field(default="", description="SHA256 hash of source file")
 
     @property
     def text(self) -> str:
@@ -170,4 +171,5 @@ class EnrichedChunk(ChunkMetadata):
             "embedded_at": self.embedded_at,
             "embedding_model": self.embedding_model,
             "chunk_id": self.chunk_id,
+            "source_hash": self.source_hash,
         }

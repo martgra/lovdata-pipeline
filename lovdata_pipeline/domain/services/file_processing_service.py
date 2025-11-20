@@ -71,6 +71,10 @@ class FileProcessingService:
     ) -> FileProcessingResult:
         """Process a single file through the complete pipeline.
 
+        On any error, we delete ALL chunks for this document (by doc_id metadata filter)
+        and the orchestrator will retry processing. This is simpler than tracking partial
+        state and we can afford to re-embed a failing file.
+
         Args:
             file_info: Information about the file to process
             progress_callback: Optional callback(current, total) for embedding progress
@@ -79,8 +83,6 @@ class FileProcessingService:
         Returns:
             FileProcessingResult with success status, chunk count, and optional error
         """
-        vector_ids_to_cleanup = []
-
         try:
             # 1. Validate file exists
             if not file_info.path.exists():
@@ -93,9 +95,10 @@ class FileProcessingService:
             # 2. Parse XML
             articles = self._xml_parser.parse_file(file_info.path)
             if not articles:
+                error_msg = f"No articles extracted from {file_info.doc_id}"
                 if warning_callback:
-                    warning_callback(f"No articles in {file_info.doc_id}")
-                return FileProcessingResult(success=True, chunk_count=0)
+                    warning_callback(error_msg)
+                return FileProcessingResult(success=False, chunk_count=0, error_message=error_msg)
 
             # 3. Chunk articles
             all_chunks = []
@@ -104,11 +107,13 @@ class FileProcessingService:
                     article,
                     file_info.doc_id,
                     file_info.dataset,
+                    file_info.hash,
                 )
                 all_chunks.extend(chunks)
 
             if not all_chunks:
-                return FileProcessingResult(success=True, chunk_count=0)
+                error_msg = f"No chunks generated from {file_info.doc_id}"
+                return FileProcessingResult(success=False, chunk_count=0, error_message=error_msg)
 
             logger.debug(f"  Chunked: {len(all_chunks)} chunks")
 
@@ -121,7 +126,6 @@ class FileProcessingService:
 
             # 5. Generate vector IDs
             vector_ids = [f"{file_info.doc_id}_chunk_{i}" for i in range(len(enriched))]
-            vector_ids_to_cleanup = vector_ids  # Track for cleanup on failure
 
             # Set IDs on enriched chunks
             for chunk, vid in zip(enriched, vector_ids, strict=True):
@@ -139,13 +143,13 @@ class FileProcessingService:
         except Exception as e:
             logger.debug(f"  Failed: {e}")
 
-            # Clean up any partial vectors that may have been indexed
-            if vector_ids_to_cleanup:
-                try:
-                    self._vector_store.delete_by_document_id(vector_ids_to_cleanup)
-                    logger.debug(f"  Cleaned up {len(vector_ids_to_cleanup)} partial vectors")
-                except Exception as cleanup_error:
-                    logger.debug(f"  Failed to clean up partial vectors: {cleanup_error}")
+            # Clean up ALL chunks for this document (simpler than tracking partial state)
+            try:
+                deleted = self._vector_store.delete_by_document_id(file_info.doc_id)
+                if deleted > 0:
+                    logger.debug(f"  Cleaned up {deleted} chunks for {file_info.doc_id}")
+            except Exception as cleanup_error:
+                logger.debug(f"  Failed to clean up chunks: {cleanup_error}")
 
             return FileProcessingResult(
                 success=False,

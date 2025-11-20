@@ -37,6 +37,9 @@ default-groups = [
     "test",
 ]
 
+[project.scripts]
+lg = "lovdata_pipeline.cli:main"
+
 [tool.uv.sources]
 lovdata-processing = { git = "https://github.com/martgra/lovlig.git" }
 

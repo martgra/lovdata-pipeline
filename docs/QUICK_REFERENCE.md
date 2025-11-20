@@ -23,6 +23,15 @@ uv run python -m lovdata_pipeline process
 # Force reprocess all files
 uv run python -m lovdata_pipeline process --force
 
+# Use JSONL storage instead of ChromaDB
+uv run python -m lovdata_pipeline process --storage jsonl
+
+# Test with first 10 files only
+uv run python -m lovdata_pipeline process --limit 10
+
+# Combine options
+uv run python -m lovdata_pipeline process -s jsonl -l 5 -f
+
 # With custom options
 uv run python -m lovdata_pipeline process \
   --data-dir /custom/path \
@@ -36,6 +45,24 @@ uv run python -m lovdata_pipeline process --dataset gjeldende-lover
 
 # Process all available datasets
 uv run python -m lovdata_pipeline process --dataset "*"
+```
+
+### Migrate Between Storage Types
+
+```bash
+# Backup ChromaDB to JSONL files
+uv run python -m lovdata_pipeline migrate --source chroma --target jsonl
+
+# Restore JSONL to ChromaDB
+uv run python -m lovdata_pipeline migrate --source jsonl --target chroma
+
+# Short form
+uv run python -m lovdata_pipeline migrate -s chroma -t jsonl
+
+# Custom paths
+uv run python -m lovdata_pipeline migrate -s chroma -t jsonl \
+  --jsonl-path ./backup \
+  --batch-size 500
 ```
 
 ### Check Status
@@ -55,11 +82,24 @@ uv run python -m lovdata_pipeline status --data-dir /custom/path
 | Option               | Short | Default                  | Description                                                               |
 | -------------------- | ----- | ------------------------ | ------------------------------------------------------------------------- |
 | `--force`            | `-f`  | `false`                  | Reprocess all files (ignore state)                                        |
+| `--storage`          | `-s`  | `chroma`                 | Storage type: `chroma` or `jsonl`                                         |
+| `--limit`            | `-l`  | `None`                   | Limit number of files to process (for testing)                            |
 | `--data-dir`         |       | `./data`                 | Data directory path                                                       |
 | `--dataset-filter`   |       | `gjeldende`              | Dataset: `gjeldende`, `gjeldende-lover`, `gjeldende-sentrale-forskrifter` |
 | `--chunk-max-tokens` |       | `6800`                   | Maximum tokens per chunk                                                  |
 | `--embedding-model`  |       | `text-embedding-3-large` | OpenAI embedding model                                                    |
 | `--chroma-path`      |       | `./data/chroma`          | ChromaDB storage path                                                     |
+
+### `migrate` Command
+
+| Option          | Short | Default       | Description                         |
+| --------------- | ----- | ------------- | ----------------------------------- |
+| `--source`      | `-s`  | _(required)_  | Source storage: `chroma` or `jsonl` |
+| `--target`      | `-t`  | _(required)_  | Target storage: `chroma` or `jsonl` |
+| `--data-dir`    |       | `./data`      | Data directory path                 |
+| `--chroma-path` |       | Uses settings | ChromaDB path (if custom)           |
+| `--jsonl-path`  |       | Uses settings | JSONL storage path (if custom)      |
+| `--batch-size`  |       | `1000`        | Batch size for migration            |
 
 ### `status` Command
 
@@ -79,6 +119,8 @@ OPENAI_API_KEY=sk-...
 
 # Optional (defaults shown)
 DATA_DIR=./data
+STORAGE_TYPE=chroma          # or 'jsonl'
+LIMIT=                       # or integer (e.g., 10)
 CHUNK_MAX_TOKENS=6800
 EMBEDDING_MODEL=text-embedding-3-large
 CHROMA_PATH=./data/chroma

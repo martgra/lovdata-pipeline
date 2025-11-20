@@ -38,19 +38,32 @@ class ChromaVectorStoreRepository:
             documents=[c.text for c in chunks],
         )
 
-    def delete_by_document_id(self, vector_ids: list[str]) -> None:
-        """Delete vectors by their IDs from ChromaDB.
+    def delete_by_document_id(self, doc_id: str) -> int:
+        """Delete all vectors for a document using metadata filter.
 
         Args:
-            vector_ids: List of vector IDs to delete
+            doc_id: Document ID to delete all chunks for
+
+        Returns:
+            Number of vectors deleted
 
         Raises:
             Exception: If ChromaDB deletion fails
         """
-        if not vector_ids:
-            return
+        if not doc_id:
+            return 0
 
-        self._collection.delete(ids=vector_ids)
+        # Get all vector IDs for this document
+        result = self._collection.get(
+            where={"document_id": doc_id},
+            include=[],  # Only need IDs
+        )
+        vector_ids = result.get("ids", [])
+
+        if vector_ids:
+            self._collection.delete(ids=vector_ids)
+
+        return len(vector_ids)
 
     def count(self) -> int:
         """Get total count of vectors in ChromaDB collection.

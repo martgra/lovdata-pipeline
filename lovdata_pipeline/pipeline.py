@@ -5,11 +5,11 @@ This module now has a single responsibility: wiring up dependencies.
 """
 
 import logging
-from pathlib import Path
 
 import chromadb
 from openai import OpenAI
 
+from lovdata_pipeline.config.settings import PipelineSettings
 from lovdata_pipeline.domain.services.chunking_service import ChunkingService
 from lovdata_pipeline.domain.services.embedding_service import EmbeddingService
 from lovdata_pipeline.domain.services.file_processing_service import FileProcessingService
@@ -32,6 +32,8 @@ def create_pipeline_orchestrator(
     embedding_model: str,
     chunk_max_tokens: int,
     chroma_path: str,
+    storage_type: str = "chroma",
+    data_dir: str = "./data",
 ) -> PipelineOrchestrator:
     """Factory function to create a fully configured pipeline orchestrator.
 
@@ -42,6 +44,8 @@ def create_pipeline_orchestrator(
         embedding_model: Model to use for embeddings
         chunk_max_tokens: Maximum tokens per chunk
         chroma_path: Path to ChromaDB storage
+        storage_type: Storage type ('chroma' or 'jsonl')
+        data_dir: Data directory for JSONL storage
 
     Returns:
         Configured PipelineOrchestrator instance
@@ -50,12 +54,23 @@ def create_pipeline_orchestrator(
     openai_client = OpenAI(api_key=openai_api_key)
     embedding_provider = OpenAIEmbeddingProvider(openai_client, embedding_model)
 
-    chroma_client = chromadb.PersistentClient(path=chroma_path)
-    collection = chroma_client.get_or_create_collection(
-        name="legal_docs",
-        metadata={"description": "Norwegian legal documents"},
-    )
-    vector_store = ChromaVectorStoreRepository(collection)
+    # Initialize vector store based on storage type
+    if storage_type == "jsonl":
+        from pathlib import Path
+
+        from lovdata_pipeline.infrastructure.jsonl_vector_store import JsonlVectorStoreRepository
+
+        jsonl_path = Path(data_dir) / "jsonl_chunks"
+        vector_store = JsonlVectorStoreRepository(jsonl_path)
+        logger.info(f"Using JSONL storage at: {jsonl_path}")
+    else:  # chroma (default)
+        chroma_client = chromadb.PersistentClient(path=chroma_path)
+        collection = chroma_client.get_or_create_collection(
+            name="legal_docs",
+            metadata={"description": "Norwegian legal documents"},
+        )
+        vector_store = ChromaVectorStoreRepository(collection)
+        logger.info(f"Using ChromaDB storage at: {chroma_path}")
 
     # Create domain services
     xml_parser = XMLParsingService()
@@ -77,7 +92,7 @@ def create_pipeline_orchestrator(
     )
 
 
-def run_pipeline(config: dict, progress_tracker: ProgressTracker | None = None):
+def run_pipeline(config: PipelineSettings, progress_tracker: ProgressTracker | None = None):
     """Run complete pipeline (backward compatibility wrapper).
 
     This function maintains backward compatibility with existing code.
@@ -101,17 +116,20 @@ def run_pipeline(config: dict, progress_tracker: ProgressTracker | None = None):
     """
     # Create orchestrator with dependencies
     orchestrator = create_pipeline_orchestrator(
-        openai_api_key=config["openai_api_key"],
-        embedding_model=config["embedding_model"],
-        chunk_max_tokens=config["chunk_max_tokens"],
-        chroma_path=config["chroma_path"],
+        openai_api_key=config.openai_api_key,
+        embedding_model=config.embedding_model,
+        chunk_max_tokens=config.chunk_max_tokens,
+        chroma_path=str(config.chroma_path),
+        storage_type=config.storage_type,
+        data_dir=str(config.data_dir),
     )
 
     # Create pipeline config
     pipeline_config = PipelineConfig(
-        data_dir=Path(config["data_dir"]),
-        dataset_filter=config["dataset_filter"],
-        force=config.get("force", False),
+        data_dir=config.data_dir,
+        dataset_filter=config.dataset_filter,
+        force=config.force or False,
+        limit=config.limit,
     )
 
     # Use NoOp tracker if none provided

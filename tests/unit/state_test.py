@@ -21,20 +21,19 @@ def test_mark_processed(tmp_path):
     state_file = tmp_path / "state.json"
     state = ProcessingState(state_file)
 
-    state.mark_processed("doc-1", "hash-abc", ["vec1", "vec2", "vec3"])
+    state.mark_processed("doc-1", "hash-abc")
     state.save()
 
     # Reload and verify
     state2 = ProcessingState(state_file)
     assert state2.is_processed("doc-1", "hash-abc")
-    assert state2.get_vectors("doc-1") == ["vec1", "vec2", "vec3"]
 
 
 def test_is_processed_checks_hash(tmp_path):
     """Test that is_processed checks the hash."""
     state = ProcessingState(tmp_path / "state.json")
 
-    state.mark_processed("doc-1", "hash-abc", ["vec1"])
+    state.mark_processed("doc-1", "hash-abc")
 
     # Same hash - should be processed
     assert state.is_processed("doc-1", "hash-abc")
@@ -67,7 +66,7 @@ def test_mark_processed_removes_failed(tmp_path):
     assert "doc-1" in state.state["failed"]
 
     # Then succeed
-    state.mark_processed("doc-1", "hash-abc", ["vec1"])
+    state.mark_processed("doc-1", "hash-abc")
     assert "doc-1" not in state.state["failed"]
     assert "doc-1" in state.state["processed"]
 
@@ -76,7 +75,7 @@ def test_remove_document(tmp_path):
     """Test removing a document from state."""
     state = ProcessingState(tmp_path / "state.json")
 
-    state.mark_processed("doc-1", "hash-abc", ["vec1"])
+    state.mark_processed("doc-1", "hash-abc")
     state.mark_failed("doc-2", "hash-xyz", "Error")
 
     state.remove("doc-1")
@@ -90,14 +89,13 @@ def test_stats(tmp_path):
     """Test getting statistics."""
     state = ProcessingState(tmp_path / "state.json")
 
-    state.mark_processed("doc-1", "hash-1", ["v1", "v2"])
-    state.mark_processed("doc-2", "hash-2", ["v3", "v4", "v5"])
+    state.mark_processed("doc-1", "hash-1")
+    state.mark_processed("doc-2", "hash-2")
     state.mark_failed("doc-3", "hash-3", "Error")
 
     stats = state.stats()
     assert stats["processed"] == 2
     assert stats["failed"] == 1
-    assert stats["total_vectors"] == 5
 
 
 def test_corrupted_state_file(tmp_path):

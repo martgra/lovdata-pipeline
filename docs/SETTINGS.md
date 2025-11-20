@@ -47,7 +47,6 @@ settings = PipelineSettings(
 # Use in pipeline
 from lovdata_pipeline.pipeline import run_pipeline
 
-config = settings.to_dict()
 result = run_pipeline(config)
 ```
 

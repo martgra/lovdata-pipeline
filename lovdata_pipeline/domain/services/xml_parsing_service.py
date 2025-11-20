@@ -46,6 +46,11 @@ class XMLParsingService:
     def parse_file(self, xml_path: Path) -> list[ParsedArticle]:
         """Parse XML file and extract legal articles.
 
+        Uses a three-tier fallback strategy:
+        1. Standard laws: Extract legalArticle elements (most modern laws)
+        2. Change laws: Extract legalP elements within section elements
+        3. Simple laws: Extract legalP elements directly under main (very old laws)
+
         Args:
             xml_path: Path to XML file to parse
 
@@ -59,10 +64,19 @@ class XMLParsingService:
         root = tree.getroot()
         articles = []
 
+        # 1. Try standard legalArticle elements
         for elem in root.xpath('//article[@class="legalArticle"]'):
             article = self._extract_article(elem)
             if article:
                 articles.append(article)
+
+        # 2. If no legalArticle found, try change law structure (legalP in sections)
+        if not articles:
+            articles = self._extract_change_law_articles(root)
+
+        # 3. If still no articles, try simple law structure (legalP directly under main)
+        if not articles:
+            articles = self._extract_simple_law_articles(root)
 
         return articles
 
@@ -108,3 +122,90 @@ class XMLParsingService:
             if h is not None and h.text:
                 return h.text.strip()
         return ""
+
+    def _extract_change_law_articles(self, root) -> list[ParsedArticle]:
+        """Extract articles from change laws (endringslover).
+
+        Change laws have legalP elements directly under section elements,
+        not wrapped in legalArticle elements.
+
+        Args:
+            root: The root XML element
+
+        Returns:
+            List of ParsedArticle objects extracted from legalP elements
+        """
+        articles = []
+
+        for section_elem in root.xpath('//section[@class="section"]'):
+            # Get section heading
+            section_heading_elem = section_elem.find(".//h2")
+            section_heading = (
+                "".join(section_heading_elem.itertext()).strip()
+                if section_heading_elem is not None
+                else ""
+            )
+
+            # Get section URL
+            section_url = section_elem.get("data-lovdata-URL", "")
+
+            # Extract legalP elements directly under this section
+            for legal_p_elem in section_elem.xpath('.//article[@class="legalP"]'):
+                legal_p_id = legal_p_elem.get("id", "")
+                article_id = legal_p_id if legal_p_id else f"{section_elem.get('id', 'unknown')}-p"
+
+                content = "".join(legal_p_elem.itertext()).strip()
+
+                if content:
+                    articles.append(
+                        ParsedArticle(
+                            article_id=article_id,
+                            content=content,
+                            heading=section_heading,
+                            address=section_url,
+                        )
+                    )
+
+        return articles
+
+    def _extract_simple_law_articles(self, root) -> list[ParsedArticle]:
+        """Extract articles from very simple/old laws.
+
+        Some very old laws have legalP elements directly under main
+        without any section or legalArticle wrapper.
+
+        Args:
+            root: The root XML element
+
+        Returns:
+            List of ParsedArticle objects extracted from direct legalP elements
+        """
+        articles = []
+
+        main_elem = root.find('.//main[@class="documentBody"]')
+        if main_elem is None:
+            return articles
+
+        # Get document title from h1
+        doc_title_elem = main_elem.find(".//h1")
+        doc_title = "".join(doc_title_elem.itertext()).strip() if doc_title_elem is not None else ""
+
+        # Get document URL
+        doc_url = main_elem.get("data-lovdata-URL", "")
+
+        # Extract legalP elements directly under main (not nested in sections)
+        for idx, legal_p_elem in enumerate(main_elem.xpath('./article[@class="legalP"]'), start=1):
+            legal_p_id = legal_p_elem.get("id", f"ledd-{idx}")
+            content = "".join(legal_p_elem.itertext()).strip()
+
+            if content:
+                articles.append(
+                    ParsedArticle(
+                        article_id=legal_p_id,
+                        content=content,
+                        heading=doc_title,
+                        address=doc_url,
+                    )
+                )
+
+        return articles

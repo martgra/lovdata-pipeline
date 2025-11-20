@@ -91,6 +91,39 @@ class Lovlig:
 
         return files
 
+    def get_all_files(self) -> list[dict]:
+        """Get all files regardless of status.
+
+        Returns list of dicts with:
+            - doc_id: document identifier
+            - path: absolute path to file
+            - hash: file hash
+            - dataset: dataset name
+        """
+        state = self._read_state()
+        files = []
+
+        for dataset_name, dataset in state.get("raw_datasets", {}).items():
+            dataset_dir = dataset_name.replace(".tar.bz2", "")
+
+            for rel_path, file_info in dataset.get("files", {}).items():
+                # Include all files except removed ones
+                status = file_info.get("status")
+                if status != "removed":
+                    abs_path = self.extracted_dir / dataset_dir / rel_path
+                    doc_id = Path(rel_path).stem
+
+                    files.append(
+                        {
+                            "doc_id": doc_id,
+                            "path": abs_path,
+                            "hash": file_info.get("sha256", ""),
+                            "dataset": dataset_name,
+                        }
+                    )
+
+        return files
+
     def get_removed_files(self) -> list[dict]:
         """Get files with status 'removed'.
 

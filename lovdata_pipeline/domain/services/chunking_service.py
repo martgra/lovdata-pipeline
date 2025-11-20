@@ -30,6 +30,7 @@ class ChunkingService:
         article: ParsedArticle,
         doc_id: str,
         dataset: str,
+        source_hash: str = "",
     ) -> list[ChunkMetadata]:
         """Split an article into chunks.
 
@@ -37,6 +38,7 @@ class ChunkingService:
             article: Parsed article to chunk
             doc_id: Document identifier
             dataset: Dataset name
+            source_hash: SHA256 hash of source file
 
         Returns:
             List of chunk metadata objects
@@ -53,6 +55,8 @@ class ChunkingService:
         )
 
         # Use the splitter to create chunks
-        chunks = self._splitter.split_article(legal_article, dataset_name=dataset)
+        chunks = self._splitter.split_article(
+            legal_article, dataset_name=dataset, source_hash=source_hash
+        )
 
         return chunks

@@ -6,9 +6,7 @@
       "source.fixAll": "explicit",
       "source.organizeImports": "explicit"
     },
-    "editor.rulers": [
-      100
-    ],
+    "editor.rulers": [100],
     "files.trimTrailingWhitespace": true
   },
   "[yaml]": {
@@ -17,9 +15,7 @@
     "editor.defaultFormatter": "esbenp.prettier-vscode",
     "editor.tabSize": 2,
     "editor.autoIndent": "keep",
-    "gitlens.codeLens.scopes": [
-      "document"
-    ],
+    "gitlens.codeLens.scopes": ["document"],
     "editor.quickSuggestions": {
       "other": true,
       "comments": false,
@@ -28,14 +24,15 @@
   },
   "python.testing.pytestEnabled": true,
   "python.testing.autoTestDiscoverOnSaveEnabled": true,
-  "python.testing.pytestArgs": [
-    "tests"
-  ],
+  "python.testing.pytestArgs": ["tests"],
   "ruff.enable": true,
   "python.analysis.typeCheckingMode": "basic",
   "python.analysis.autoImportCompletions": true,
   "python.testing.unittestEnabled": false,
   "editor.defaultFormatter": "esbenp.prettier-vscode",
   "editor.formatOnSave": true,
-  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python"
+  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+  "[xml]": {
+    "editor.defaultFormatter": "DotJoshJohnson.xml"
+  }
 }

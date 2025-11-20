@@ -44,6 +44,12 @@ class PipelineSettings(BaseSettings):
         description="OpenAI embedding model to use",
     )
 
+    # Storage Configuration
+    storage_type: str = Field(
+        default="chroma",
+        description="Vector storage type: 'chroma' or 'jsonl'",
+    )
+
     # Pipeline Configuration
     data_dir: Path = Field(
         default=Path("./data"),
@@ -69,6 +75,10 @@ class PipelineSettings(BaseSettings):
         default=False,
         description="Force reprocessing of all files",
     )
+    limit: int | None = Field(
+        default=None,
+        description="Limit number of files to process (for testing)",
+    )
 
     @field_validator("data_dir", "chroma_path", mode="before")
     @classmethod
@@ -76,6 +86,14 @@ class PipelineSettings(BaseSettings):
         """Convert string paths to Path objects."""
         if isinstance(v, str):
             return Path(v)
+        return v
+
+    @field_validator("storage_type")
+    @classmethod
+    def validate_storage_type(cls, v: str) -> str:
+        """Validate storage type is supported."""
+        if v not in ["chroma", "jsonl"]:
+            raise ValueError(f"storage_type must be 'chroma' or 'jsonl', got '{v}'")
         return v
 
     @field_validator("openai_api_key")
@@ -97,19 +115,3 @@ class PipelineSettings(BaseSettings):
         if not v or not v.strip():
             raise ValueError("Dataset filter cannot be empty")
         return v.strip()
-
-    def to_dict(self) -> dict:
-        """Convert settings to dictionary for backward compatibility.
-
-        Returns:
-            Dictionary with all settings as strings/primitives
-        """
-        return {
-            "openai_api_key": self.openai_api_key,
-            "embedding_model": self.embedding_model,
-            "data_dir": str(self.data_dir),
-            "chroma_path": str(self.chroma_path),
-            "chunk_max_tokens": self.chunk_max_tokens,
-            "dataset_filter": self.dataset_filter,
-            "force": self.force,
-        }

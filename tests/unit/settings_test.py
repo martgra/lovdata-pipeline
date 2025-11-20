@@ -165,24 +165,6 @@ def test_settings_path_conversion(monkeypatch):
     assert settings.chroma_path == Path("/tmp/chroma")
 
 
-def test_settings_to_dict(monkeypatch):
-    """Test conversion to dictionary."""
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test123456789012345678")
-
-    settings = PipelineSettings(
-        data_dir="/custom/data",
-        force=True,
-    )
-
-    config_dict = settings.to_dict()
-
-    assert isinstance(config_dict, dict)
-    assert config_dict["openai_api_key"] == "sk-test123456789012345678"
-    assert config_dict["data_dir"] == "/custom/data"
-    assert config_dict["force"] is True
-    assert isinstance(config_dict["chunk_max_tokens"], int)
-
-
 def test_settings_case_insensitive(monkeypatch):
     """Test that environment variables are case-insensitive."""
     monkeypatch.setenv("openai_api_key", "sk-test123456789012345678")  # pragma: allowlist secret
