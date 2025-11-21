@@ -13,6 +13,11 @@ data/
 
 # Test artifacts
 test_chroma/
+chroma.sqlite3*
+*.sqlite3
+*.sqlite3-*
+*Mock*/
+<Mock*
 
 # Docker environment
 .env
@@ -153,3 +158,4 @@ temp_out/
 test_output/
 build_output/
 /data/chunks/*.jsonl
+/data-bak/

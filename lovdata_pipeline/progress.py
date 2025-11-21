@@ -15,8 +15,6 @@ from rich.progress import (
     Progress,
     SpinnerColumn,
     TextColumn,
-    TimeElapsedColumn,
-    TimeRemainingColumn,
 )
 
 logger = logging.getLogger(__name__)
@@ -136,44 +134,35 @@ class NoOpProgressTracker:
 class RichProgressTracker:
     """Progress tracker using Rich library for beautiful progress bars.
 
-    Provides multi-level progress tracking:
-    - Stage-level: Overall pipeline stages (sync, process, cleanup)
-    - File-level: Progress through files being processed
-    - Operation-level: Progress within operations (embedding, extraction)
+    Provides multi-level progress tracking with automatic lifecycle management.
     """
 
     def __init__(self, console: Console | None = None):
-        """Initialize the Rich progress tracker.
-
-        Args:
-            console: Optional Rich console instance. If not provided, creates one.
-        """
+        """Initialize the Rich progress tracker."""
         self.console = console or Console()
-        self.progress: Progress | None = None
+        self._file_progress: Progress | None = None
+        self._embedding_progress: Progress | None = None
         self.current_stage: str | None = None
-        self.file_task_id: Any | None = None
-        self.embedding_task_id: Any | None = None
-        self._active = False
+        self._file_task_id: Any | None = None
+        self._embedding_task_id: Any | None = None
 
-    def _ensure_progress(self) -> Progress:
-        """Ensure progress instance exists and is started."""
-        if self.progress is None:
-            self.progress = Progress(
-                SpinnerColumn(),
-                TextColumn("[bold blue]{task.description}"),
-                BarColumn(bar_width=40),
-                MofNCompleteColumn(),
-                TextColumn("•"),
-                TimeElapsedColumn(),
-                TextColumn("•"),
-                TimeRemainingColumn(),
-                console=self.console,
-                transient=False,
-            )
-        if not self._active:
-            self.progress.start()
-            self._active = True
-        return self.progress
+    def _get_or_create_progress(self, attr_name: str, create_fn: callable) -> tuple[Progress, bool]:
+        """Get existing progress or create new one. Returns (progress, was_created)."""
+        progress = getattr(self, attr_name)
+        if progress is None:
+            progress = create_fn()
+            setattr(self, attr_name, progress)
+            progress.start()
+            return progress, True
+        return progress, False
+
+    def _cleanup_progress(self, attr_name: str, task_id_attr: str) -> None:
+        """Stop and clean up a progress instance."""
+        progress = getattr(self, attr_name)
+        if progress is not None:
+            progress.stop()
+            setattr(self, attr_name, None)
+            setattr(self, task_id_attr, None)
 
     def start_stage(self, stage: str, description: str) -> None:
         """Start a new pipeline stage."""
@@ -187,58 +176,65 @@ class RichProgressTracker:
 
     def start_file_processing(self, total_files: int) -> None:
         """Start tracking file processing progress."""
-        progress = self._ensure_progress()
-        self.file_task_id = progress.add_task(
-            f"[green]Processing {total_files} files", total=total_files
+        progress, _ = self._get_or_create_progress(
+            "_file_progress",
+            lambda: Progress(
+                SpinnerColumn(),
+                TextColumn("[bold blue]{task.description}"),
+                BarColumn(bar_width=40),
+                MofNCompleteColumn(),
+                console=self.console,
+                transient=False,
+            ),
         )
+        self._file_task_id = progress.add_task(f"Processing {total_files} files", total=total_files)
 
     def update_file(self, doc_id: str, current: int, total: int) -> None:
         """Update progress for current file being processed."""
-        if self.progress and self.file_task_id is not None:
-            # Update description to show current file
-            self.progress.update(
-                self.file_task_id,
+        if self._file_progress and self._file_task_id is not None:
+            self._file_progress.update(
+                self._file_task_id,
                 completed=current,
-                description=f"[green]Processing: {doc_id[:50]}...",
+                description=f"Processing: {doc_id[:50]}...",
             )
 
     def end_file_processing(self) -> None:
         """End file processing progress tracking."""
-        if self.progress and self.file_task_id is not None:
-            self.progress.update(self.file_task_id, visible=False)
-            self.file_task_id = None
-
-        # Stop and clean up progress instance
-        if self.progress and self._active:
-            self.progress.stop()
-            self._active = False
-            self.progress = None
+        if self._file_progress and self._file_task_id is not None:
+            self._file_progress.update(self._file_task_id, visible=False)
+        self._cleanup_progress("_file_progress", "_file_task_id")
 
     def start_embedding(self, total_chunks: int) -> None:
         """Start tracking embedding progress within a file."""
-        progress = self._ensure_progress()
-        self.embedding_task_id = progress.add_task(
-            "[yellow]  └─ Embedding chunks", total=total_chunks
+        progress, _ = self._get_or_create_progress(
+            "_embedding_progress",
+            lambda: Progress(
+                SpinnerColumn(),
+                TextColumn("{task.description}"),
+                console=self.console,
+                transient=False,
+            ),
         )
+        self._embedding_task_id = progress.add_task("[yellow]  └─ Embedding chunks", total=None)
 
     def update_embedding(self, chunks_embedded: int, total_chunks: int) -> None:
         """Update embedding progress."""
-        if self.progress and self.embedding_task_id is not None:
-            self.progress.update(
-                self.embedding_task_id,
+        if self._embedding_progress and self._embedding_task_id is not None:
+            self._embedding_progress.update(
+                self._embedding_task_id,
                 completed=chunks_embedded,
+                total=total_chunks,
                 description=f"[yellow]  └─ Embedding chunks ({chunks_embedded}/{total_chunks})",
             )
 
     def end_embedding(self) -> None:
         """End embedding progress tracking."""
-        if self.progress and self.embedding_task_id is not None:
-            self.progress.remove_task(self.embedding_task_id)
-            self.embedding_task_id = None
+        if self._embedding_progress and self._embedding_task_id is not None:
+            self._embedding_progress.remove_task(self._embedding_task_id)
+        self._cleanup_progress("_embedding_progress", "_embedding_task_id")
 
     def log_success(self, doc_id: str, chunk_count: int) -> None:
         """Log successful processing of a document."""
-        # Use logger for debug, keep console clean
         logger.debug(f"✓ {doc_id}: {chunk_count} chunks")
 
     def log_warning(self, message: str) -> None:
@@ -256,5 +252,5 @@ class RichProgressTracker:
         self.console.print("\n[bold cyan]═══ Summary ═══[/bold cyan]")
         self.console.print(f"[green]✓[/green] Processed: {summary.get('processed', 0)} documents")
         self.console.print(f"[red]✗[/red] Failed: {summary.get('failed', 0)} documents")
-        self.console.print(f"[blue]📊[/blue] Total vectors: {summary.get('total_vectors', 0)}")
-        self.console.print(f"[yellow]🗑️[/yellow] Removed: {summary.get('removed', 0)} documents")
+        if summary.get("removed", 0) > 0:
+            self.console.print(f"[yellow]🗑️[/yellow] Removed: {summary['removed']} documents")

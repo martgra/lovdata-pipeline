@@ -14,14 +14,7 @@ SplitReason = Literal["none", "paragraph", "sentence", "token"]
 
 
 class SyncStatistics(BaseModel):
-    """Statistics from a lovlig sync operation.
-
-    Attributes:
-        files_added: Number of files added in this sync
-        files_modified: Number of files modified in this sync
-        files_removed: Number of files removed in this sync
-        duration_seconds: Duration of the sync operation in seconds
-    """
+    """Statistics from a lovlig sync operation."""
 
     files_added: int = Field(ge=0, description="Number of files added")
     files_modified: int = Field(ge=0, description="Number of files modified")
@@ -36,17 +29,7 @@ class SyncStatistics(BaseModel):
 
 
 class FileMetadata(BaseModel):
-    """Metadata about a single file from lovlig state.
-
-    Attributes:
-        relative_path: Path relative to extracted data directory
-        absolute_path: Absolute filesystem path
-        file_hash: SHA256 hash of file contents
-        dataset_name: Name of the dataset (e.g., 'gjeldende-lover')
-        status: File status (added, modified, or removed)
-        file_size_bytes: Size of file in bytes
-        document_id: Document identifier extracted from filename
-    """
+    """Metadata about a single file from lovlig state."""
 
     relative_path: str = Field(description="Relative path from extracted data dir")
     absolute_path: Path = Field(description="Absolute filesystem path")
@@ -59,25 +42,14 @@ class FileMetadata(BaseModel):
     model_config = {"arbitrary_types_allowed": True}
 
     def model_dump_custom(self) -> dict:
-        """Convert to dictionary with Path as string.
-
-        Returns:
-            Dictionary representation of file metadata
-        """
+        """Convert to dictionary with Path as string."""
         data = self.model_dump()
         data["absolute_path"] = str(self.absolute_path)
         return data
 
 
 class RemovalInfo(BaseModel):
-    """Information about a removed file.
-
-    Attributes:
-        document_id: Document identifier
-        relative_path: Path that was removed
-        dataset_name: Name of the dataset
-        last_hash: Last known hash of the file
-    """
+    """Information about a removed file."""
 
     document_id: str = Field(description="Document identifier")
     relative_path: str = Field(description="Relative path that was removed")
@@ -88,19 +60,8 @@ class RemovalInfo(BaseModel):
 class ChunkMetadata(BaseModel):
     """Metadata for a single legal document chunk.
 
-    This model represents a chunk of text extracted from a Lovdata XML document.
-    Chunks are created using XML-aware splitting that respects legal structure.
-
-    Attributes:
-        chunk_id: Unique identifier for this chunk
-        document_id: ID of the source document
-        dataset_name: Name of the dataset (e.g., 'gjeldende-lover.tar.bz2')
-        content: The actual text content of the chunk
-        token_count: Number of tokens in the content
-        section_heading: Title/heading of the legal section
-        absolute_address: Lovdata absolute address (e.g., NL/lov/1687-04-15/b1/k21/a15)
-        split_reason: Why chunk was created (none=fits naturally, paragraph/sentence/token)
-        parent_chunk_id: ID of parent chunk if this is a sub-chunk from splitting
+    Represents a chunk of text extracted from a Lovdata XML document using
+    XML-aware splitting that respects legal structure.
     """
 
     chunk_id: str = Field(description="Unique identifier for this chunk")
@@ -116,28 +77,21 @@ class ChunkMetadata(BaseModel):
     parent_chunk_id: str | None = Field(
         default=None, description="Parent chunk ID if this is a sub-chunk"
     )
+    source_hash: str = Field(default="", description="SHA256 hash of source file")
+    cross_refs: list[str] = Field(
+        default_factory=list, description="Cross-references to other laws (href values)"
+    )
 
     @property
     def text(self) -> str:
-        """Alias for content attribute.
-
-        Provides compatibility for code expecting .text instead of .content.
-
-        Returns:
-            The chunk's text content
-        """
+        """Alias for content attribute for compatibility."""
         return self.content
 
 
 class EnrichedChunk(ChunkMetadata):
-    """Chunk with embedding and metadata for vector storage.
+    """Chunk with embedding vector for vector storage.
 
     Extends ChunkMetadata with embedding information for vector database indexing.
-
-    Attributes:
-        embedding: Vector embedding of the chunk content
-        embedding_model: Name of the model used to generate the embedding
-        embedded_at: Timestamp when the embedding was created
     """
 
     embedding: list[float] = Field(description="Vector embedding of the content")
@@ -148,8 +102,8 @@ class EnrichedChunk(ChunkMetadata):
     def metadata(self) -> dict[str, Any]:
         """Get metadata dict for vector DB storage.
 
-        Returns:
-            Dictionary containing all metadata fields for vector database
+        ChromaDB only accepts str, int, float, bool, or None as metadata values.
+        Lists are not supported, so we convert cross_refs to a comma-separated string.
         """
         # Reconstruct file_path from dataset_name and document_id
         file_path = (
@@ -157,6 +111,9 @@ class EnrichedChunk(ChunkMetadata):
             if self.dataset_name
             else ""
         )
+
+        # Convert cross_refs list to comma-separated string for ChromaDB compatibility
+        cross_refs_str = ",".join(self.cross_refs) if self.cross_refs else ""
 
         return {
             "document_id": self.document_id,
@@ -170,4 +127,130 @@ class EnrichedChunk(ChunkMetadata):
             "embedded_at": self.embedded_at,
             "embedding_model": self.embedding_model,
             "chunk_id": self.chunk_id,
+            "source_hash": self.source_hash,
+            "cross_refs": cross_refs_str,
         }
+
+
+# ============================================================================
+# Chunking Models
+# ============================================================================
+
+
+class Chunk(BaseModel):
+    """Minimal chunk representation from chunker."""
+
+    chunk_id: str = Field(description="Unique identifier for this chunk")
+    text: str = Field(description="Text content of the chunk")
+    token_count: int = Field(ge=0, description="Number of tokens in the text")
+    metadata: dict[str, Any] = Field(
+        default_factory=dict, description="Structural/hierarchical info"
+    )
+
+
+# ============================================================================
+# File Processing Models
+# ============================================================================
+
+
+class FileInfo(BaseModel):
+    """Information about a file to process."""
+
+    doc_id: str = Field(description="Document identifier")
+    path: Path = Field(description="Path to the file")
+    dataset: str = Field(description="Dataset name")
+    hash: str = Field(description="SHA256 hash of file")
+
+    model_config = {"arbitrary_types_allowed": True}
+
+
+class FileProcessingResult(BaseModel):
+    """Result of processing a single file."""
+
+    success: bool = Field(description="Whether processing succeeded")
+    chunk_count: int = Field(ge=0, description="Number of chunks created")
+    error_message: str | None = Field(default=None, description="Error message if failed")
+
+
+# ============================================================================
+# Pipeline Orchestration Models
+# ============================================================================
+
+
+class PipelineConfig(BaseModel):
+    """Configuration for pipeline execution."""
+
+    data_dir: Path = Field(description="Root data directory")
+    dataset_filter: str = Field(description="Dataset filter pattern")
+    force: bool = Field(default=False, description="Force reprocessing")
+    limit: int | None = Field(
+        default=None, description="Limit number of files to process (for testing)"
+    )
+
+    model_config = {"arbitrary_types_allowed": True}
+
+
+class PipelineResult(BaseModel):
+    """Result of pipeline execution."""
+
+    processed: int = Field(ge=0, description="Number of documents processed")
+    failed: int = Field(ge=0, description="Number of documents failed")
+    removed: int = Field(ge=0, description="Number of documents removed")
+
+
+# ============================================================================
+# Lovlig Integration Models
+# ============================================================================
+
+
+class LovligFileInfo(BaseModel):
+    """Information about a file from lovlig state."""
+
+    doc_id: str = Field(description="Document identifier")
+    path: Path = Field(description="Absolute path to file")
+    hash: str = Field(description="SHA256 hash of file")
+    dataset: str = Field(description="Dataset name")
+
+    model_config = {"arbitrary_types_allowed": True}
+
+
+class LovligRemovedFileInfo(BaseModel):
+    """Information about a removed file from lovlig state."""
+
+    doc_id: str = Field(description="Document identifier")
+    dataset: str = Field(description="Dataset name")
+
+
+class LovligSyncStats(BaseModel):
+    """Statistics from lovlig sync operation."""
+
+    added: int = Field(ge=0, description="Number of files added")
+    modified: int = Field(ge=0, description="Number of files modified")
+    removed: int = Field(ge=0, description="Number of files removed")
+
+
+# ============================================================================
+# State Management Models
+# ============================================================================
+
+
+class ProcessedDocumentInfo(BaseModel):
+    """Information about a successfully processed document."""
+
+    hash: str = Field(description="SHA256 hash of document")
+    at: str = Field(description="ISO timestamp when processed")
+
+
+class FailedDocumentInfo(BaseModel):
+    """Information about a failed document."""
+
+    hash: str = Field(description="SHA256 hash of document")
+    error: str = Field(description="Error message")
+    at: str = Field(description="ISO timestamp when failed")
+
+
+class ProcessingStateData(BaseModel):
+    """Complete processing state structure."""
+
+    processed: dict[str, ProcessedDocumentInfo] = Field(default_factory=dict)
+    failed: dict[str, FailedDocumentInfo] = Field(default_factory=dict)

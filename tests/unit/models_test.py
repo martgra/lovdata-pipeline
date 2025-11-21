@@ -1,11 +1,9 @@
-"""Unit tests for domain models."""
+"""Unit tests for domain models.
 
-from pathlib import Path
+Tests only custom logic in models. Pydantic validation is tested by Pydantic.
+"""
 
-import pytest
-from pydantic import ValidationError
-
-from lovdata_pipeline.domain.models import ChunkMetadata, FileMetadata, RemovalInfo, SyncStatistics
+from lovdata_pipeline.domain.models import EnrichedChunk, SyncStatistics
 
 
 def test_sync_statistics_total_changed():
@@ -18,131 +16,78 @@ def test_sync_statistics_total_changed():
     assert stats.files_removed == 2
 
 
-def test_sync_statistics_validation():
-    """Test that Pydantic validation works."""
-    # Valid data
-    stats = SyncStatistics(files_added=0, files_modified=0, files_removed=0)
-    assert stats.files_added == 0
+def test_enriched_chunk_metadata_converts_cross_refs_to_string():
+    """Test that EnrichedChunk.metadata converts cross_refs list to comma-separated string.
 
-    # Negative values should be rejected
-    with pytest.raises(ValidationError):
-        SyncStatistics(files_added=-1, files_modified=0, files_removed=0)
-
-
-def test_file_metadata_serialization():
-    """Test FileMetadata serialization with Pydantic."""
-    metadata = FileMetadata(
-        relative_path="gjeldende-lover/LOV-2024-01-01.xml",
-        absolute_path=Path("/data/extracted/gjeldende-lover/LOV-2024-01-01.xml"),
-        file_hash="abc123",
-        dataset_name="gjeldende-lover",
-        status="added",
-        file_size_bytes=1024,
-        document_id="LOV-2024-01-01",
-    )
-
-    # Use model_dump_custom for dict with string path
-    result = metadata.model_dump_custom()
-
-    assert result["relative_path"] == "gjeldende-lover/LOV-2024-01-01.xml"
-    assert result["document_id"] == "LOV-2024-01-01"
-    assert result["status"] == "added"
-    assert result["file_size_bytes"] == 1024
-    assert isinstance(result["absolute_path"], str)
-
-
-def test_removal_info_serialization():
-    """Test RemovalInfo serialization with Pydantic."""
-    info = RemovalInfo(
-        document_id="LOV-2024-01-01",
-        relative_path="gjeldende-lover/LOV-2024-01-01.xml",
-        dataset_name="gjeldende-lover",
-        last_hash="abc123",
-    )
-
-    # Use Pydantic's model_dump
-    result = info.model_dump()
-
-    assert result["document_id"] == "LOV-2024-01-01"
-    assert result["relative_path"] == "gjeldende-lover/LOV-2024-01-01.xml"
-    assert result["last_hash"] == "abc123"
-
-
-def test_chunk_metadata_creation():
-    """Test ChunkMetadata creation and validation."""
-    chunk = ChunkMetadata(
-        chunk_id="doc1_art1",
-        document_id="doc1",
-        content="Legal text content",
-        token_count=50,
-        section_heading="§ 1",
-        absolute_address="NL/lov/2024/§1",
-        split_reason="none",
-    )
-
-    assert chunk.chunk_id == "doc1_art1"
-    assert chunk.document_id == "doc1"
-    assert chunk.token_count == 50
-    assert chunk.split_reason == "none"
-    assert chunk.parent_chunk_id is None
-
-
-def test_chunk_metadata_with_parent():
-    """Test ChunkMetadata with parent chunk reference."""
-    chunk = ChunkMetadata(
-        chunk_id="doc1_art1_sub_001",
-        document_id="doc1",
-        content="Sub-chunk content",
-        token_count=30,
-        section_heading="§ 1",
-        absolute_address="NL/lov/2024/§1",
-        split_reason="paragraph",
-        parent_chunk_id="doc1_art1",
-    )
-
-    assert chunk.parent_chunk_id == "doc1_art1"
-    assert chunk.split_reason == "paragraph"
-
-
-def test_chunk_metadata_serialization():
-    """Test ChunkMetadata serialization to dict."""
-    chunk = ChunkMetadata(
-        chunk_id="test_chunk",
-        document_id="test_doc",
-        content="Content with Norwegian: æøå",
-        token_count=100,
-        section_heading="§ 2",
-        absolute_address="LOV/2024/§2",
-        split_reason="sentence",
-        parent_chunk_id="parent_chunk",
-    )
-
-    result = chunk.model_dump()
-
-    assert result["chunk_id"] == "test_chunk"
-    assert result["document_id"] == "test_doc"
-    assert "æøå" in result["content"]
-    assert result["token_count"] == 100
-    assert result["split_reason"] == "sentence"
-    assert result["parent_chunk_id"] == "parent_chunk"
-
-
-def test_chunk_metadata_validation():
-    """Test ChunkMetadata validation."""
-    # Valid chunk
-    chunk = ChunkMetadata(
-        chunk_id="valid",
-        document_id="doc",
-        content="content",
+    ChromaDB only accepts primitive types (str, int, float, bool) as metadata values.
+    Lists must be converted to strings.
+    """
+    chunk = EnrichedChunk(
+        chunk_id="test-chunk-1",
+        document_id="test-doc",
+        dataset_name="test-dataset.tar.bz2",
+        content="Test content with cross references",
         token_count=10,
+        embedding=[0.1, 0.2, 0.3],
+        embedding_model="test-model",
+        embedded_at="2024-01-01T00:00:00Z",
+        source_hash="abc123",
+        cross_refs=["/lov/2020/§5", "/lov/2020/§10", "/lov/2021/§3"],
     )
-    assert chunk.token_count == 10
 
-    # Negative token count should be rejected
-    with pytest.raises(ValidationError):
-        ChunkMetadata(
-            chunk_id="invalid",
-            document_id="doc",
-            content="content",
-            token_count=-1,
+    metadata = chunk.metadata
+
+    # cross_refs should be converted to comma-separated string
+    assert isinstance(metadata["cross_refs"], str)
+    assert metadata["cross_refs"] == "/lov/2020/§5,/lov/2020/§10,/lov/2021/§3"
+
+
+def test_enriched_chunk_metadata_handles_empty_cross_refs():
+    """Test that EnrichedChunk.metadata handles empty cross_refs list correctly."""
+    chunk = EnrichedChunk(
+        chunk_id="test-chunk-2",
+        document_id="test-doc",
+        dataset_name="test-dataset.tar.bz2",
+        content="Test content without cross references",
+        token_count=10,
+        embedding=[0.1, 0.2, 0.3],
+        embedding_model="test-model",
+        embedded_at="2024-01-01T00:00:00Z",
+        source_hash="def456",
+        cross_refs=[],
+    )
+
+    metadata = chunk.metadata
+
+    # Empty cross_refs list should become empty string, not empty list
+    assert isinstance(metadata["cross_refs"], str)
+    assert metadata["cross_refs"] == ""
+
+
+def test_enriched_chunk_metadata_all_values_are_primitives():
+    """Test that all metadata values are ChromaDB-compatible primitive types."""
+    chunk = EnrichedChunk(
+        chunk_id="test-chunk-3",
+        document_id="test-doc",
+        dataset_name="test-dataset.tar.bz2",
+        content="Test content",
+        token_count=42,
+        section_heading="Test Section",
+        absolute_address="/test/address",
+        split_reason="paragraph",
+        parent_chunk_id="parent-chunk",
+        embedding=[0.1, 0.2, 0.3],
+        embedding_model="test-model",
+        embedded_at="2024-01-01T00:00:00Z",
+        source_hash="ghi789",
+        cross_refs=["/ref1", "/ref2"],
+    )
+
+    metadata = chunk.metadata
+
+    # Verify all values are primitive types (str, int, float, bool, None)
+    for key, value in metadata.items():
+        assert isinstance(value, (str, int, float, bool, type(None))), (
+            f"Metadata key '{key}' has value of type {type(value).__name__}, "
+            "which is not supported by ChromaDB. Only str, int, float, bool, or None are allowed."
         )

@@ -16,7 +16,7 @@ def atomic_write_json(
     file_path: Path,
     data: dict,
     indent: int = 2,
-    ensure_ascii: bool = False,
+    ensure_ascii: bool = True,
     **json_kwargs,
 ) -> None:
     """Write JSON data to file atomically using temp file + rename.

@@ -6,60 +6,57 @@
 
 A simple Python pipeline for processing Norwegian legal documents from Lovdata into a searchable vector database.
 
+![Demo](docs/assets/demo.gif)
+
 ## Quick Start
 
 ```bash
 # Install dependencies
 make install
 
-# Run pipeline
-uv run python -m lovdata_pipeline process
+# Run pipeline (process all changed files)
+uv run lg process --storage jsonl
 ```
 
-One command. Atomic per-file processing. Simple state tracking.
+One command processes all changed files. Each file completes fully (parse → chunk → embed → index) before moving to the next. Simple JSON state tracking.
 
 ## Documentation
 
-### For Users
-
-- **[User Guide](docs/USER_GUIDE.md)** - Installation, usage, configuration, troubleshooting
-- **[Quick Reference](docs/QUICK_REFERENCE.md)** - Command cheat sheet
-
-### For Developers
-
-- **[Developer Guide](docs/DEVELOPER_GUIDE.md)** - Architecture, extending, testing, contributing
-- **[Functional Requirements](docs/FUNCTIONAL_REQUIREMENTS.md)** - Specification that all changes must satisfy
+- **[Guide](docs/GUIDE.md)** - Complete user manual (installation, configuration, usage, troubleshooting)
+- **[Development](docs/DEVELOPMENT.md)** - Developer reference (architecture, extending, testing, contributing)
 
 ## What It Does
 
-For each file:
+Processes Norwegian legal documents into searchable vectors:
 
 1. **Sync** - Download from Lovdata (via lovlig library)
-2. **Parse** - Extract articles from XML (XMLParsingService)
-3. **Chunk** - Split into token-sized pieces (ChunkingService)
-4. **Embed** - Generate embeddings via OpenAI (EmbeddingService)
-5. **Index** - Store in ChromaDB (VectorStore)
+2. **Parse & Chunk** - Extract and split articles into semantic chunks
+3. **Embed** - Generate vectors via OpenAI API
+4. **Index** - Store in JSONL files or ChromaDB
 
-Atomic processing: each file completes fully before moving to the next.
+**Atomic Processing:** Each file completes all steps before the next file starts. If processing fails, the file is marked as failed and retried on the next run.
 
-### Architecture
-
-The pipeline uses a **service-oriented architecture** with:
-
-- **Dependency Injection** - Services wired through factory pattern
-- **Protocol Interfaces** - Extensible via `EmbeddingProvider` and `VectorStoreRepository` protocols
-- **Domain Services** - Parsing, chunking, embedding, and file processing
-- **Orchestration Layer** - `PipelineOrchestrator` coordinates the workflow
+## Architecture design with dependency injection and protocol-based interfaces for extensibility. See [DEVELOPMENT.md](docs/DEVELOPMENT.md) for architecture details.
 
 ## Key Features
 
-- **Atomic processing** - Complete each file before moving to next
-- **Simple state** - JSON file tracks processed/failed documents
-- **Change detection** - Uses lovlig library for file changes
-- **Automatic cleanup** - Removes vectors for deleted/modified files
-- **Single command** - No stages, no complex orchestration
-- **Quality tools** - Ruff, Pylint, Prek git hooks
-- **Dev container** - Reproducible environment
+**Processing:**
+
+- Atomic per-file execution (all-or-nothing)
+- Automatic change detection and cleanup
+- Simple JSON state tracking
+- Single-command operation
+
+**Storage:**
+
+- JSONL files (simple, portable) or ChromaDB (production-ready)
+- Automatic migration between storage types
+
+**Development:**
+
+- Quality tools (Ruff, Pylint, pre-commit hooks)
+- Full test coverage with pytest
+- Dev container for reproducible environment
 
 ## Requirements
 

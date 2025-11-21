@@ -69,17 +69,17 @@ def test_get_changed_files(temp_lovlig_setup):
     # Should return added and modified (not removed)
     assert len(changed) == 2
 
-    doc_ids = {f["doc_id"] for f in changed}
+    doc_ids = {f.doc_id for f in changed}
     assert "nl-001" in doc_ids
     assert "nl-002" in doc_ids
     assert "nl-003" not in doc_ids
 
     # Check structure
     for file_info in changed:
-        assert "doc_id" in file_info
-        assert "path" in file_info
-        assert "hash" in file_info
-        assert "dataset" in file_info
+        assert file_info.doc_id
+        assert file_info.path
+        assert file_info.hash
+        assert file_info.dataset
 
 
 def test_get_removed_files(temp_lovlig_setup):
@@ -94,8 +94,8 @@ def test_get_removed_files(temp_lovlig_setup):
     removed = lovlig.get_removed_files()
 
     assert len(removed) == 1
-    assert removed[0]["doc_id"] == "nl-003"
-    assert removed[0]["dataset"] == "gjeldende-lover.tar.bz2"
+    assert removed[0].doc_id == "nl-003"
+    assert removed[0].dataset == "gjeldende-lover.tar.bz2"
 
 
 def test_empty_state_file(tmp_path):
@@ -151,6 +151,6 @@ def test_sync(mock_sync, tmp_path):
     assert call_kwargs["force_download"] is False
 
     # Check stats
-    assert stats["added"] == 1
-    assert stats["modified"] == 1
-    assert stats["removed"] == 1
+    assert stats.added == 1
+    assert stats.modified == 1
+    assert stats.removed == 1

@@ -43,6 +43,18 @@ class PipelineSettings(BaseSettings):
         default="text-embedding-3-large",
         description="OpenAI embedding model to use",
     )
+    embedding_dimensions: int = Field(
+        default=1024,
+        ge=256,
+        le=3072,
+        description="Embedding vector dimensions (1024=optimal balance, 3072=max quality)",
+    )
+
+    # Storage Configuration
+    storage_type: str = Field(
+        default="chroma",
+        description="Vector storage type: 'chroma' or 'jsonl'",
+    )
 
     # Pipeline Configuration
     data_dir: Path = Field(
@@ -59,6 +71,24 @@ class PipelineSettings(BaseSettings):
         le=10000,
         description="Maximum tokens per chunk",
     )
+    chunk_target_tokens: int = Field(
+        default=2000,
+        ge=100,
+        le=8191,
+        description="Target tokens per chunk (768=optimal for Norwegian legal text)",
+    )
+    chunk_min_tokens: int = Field(
+        default=300,
+        ge=50,
+        le=1000,
+        description="Minimum tokens per chunk (prevents tiny chunks, reduces storage overhead)",
+    )
+    chunk_overlap_ratio: float = Field(
+        default=0.15,
+        ge=0.0,
+        le=0.5,
+        description="Overlap ratio between chunks (0.0-0.5)",
+    )
 
     # Processing Configuration
     dataset_filter: str = Field(
@@ -69,6 +99,10 @@ class PipelineSettings(BaseSettings):
         default=False,
         description="Force reprocessing of all files",
     )
+    limit: int | None = Field(
+        default=None,
+        description="Limit number of files to process (for testing)",
+    )
 
     @field_validator("data_dir", "chroma_path", mode="before")
     @classmethod
@@ -76,6 +110,14 @@ class PipelineSettings(BaseSettings):
         """Convert string paths to Path objects."""
         if isinstance(v, str):
             return Path(v)
+        return v
+
+    @field_validator("storage_type")
+    @classmethod
+    def validate_storage_type(cls, v: str) -> str:
+        """Validate storage type is supported."""
+        if v not in ["chroma", "jsonl"]:
+            raise ValueError(f"storage_type must be 'chroma' or 'jsonl', got '{v}'")
         return v
 
     @field_validator("openai_api_key")
@@ -97,19 +139,3 @@ class PipelineSettings(BaseSettings):
         if not v or not v.strip():
             raise ValueError("Dataset filter cannot be empty")
         return v.strip()
-
-    def to_dict(self) -> dict:
-        """Convert settings to dictionary for backward compatibility.
-
-        Returns:
-            Dictionary with all settings as strings/primitives
-        """
-        return {
-            "openai_api_key": self.openai_api_key,
-            "embedding_model": self.embedding_model,
-            "data_dir": str(self.data_dir),
-            "chroma_path": str(self.chroma_path),
-            "chunk_max_tokens": self.chunk_max_tokens,
-            "dataset_filter": self.dataset_filter,
-            "force": self.force,
-        }

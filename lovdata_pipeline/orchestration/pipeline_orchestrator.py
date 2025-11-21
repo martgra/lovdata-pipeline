@@ -5,37 +5,24 @@ Single Responsibility: Coordinate sync -> identify -> process -> cleanup stages.
 """
 
 import logging
-from dataclasses import dataclass
 from pathlib import Path
 
-from lovdata_pipeline.domain.services.file_processing_service import (
-    FileInfo,
-    FileProcessingService,
-)
+import chromadb
+from openai import OpenAI
+
+from lovdata_pipeline.domain.models import FileInfo, PipelineConfig, PipelineResult
+from lovdata_pipeline.domain.services.chunking_service import ChunkingService
+from lovdata_pipeline.domain.services.embedding_service import EmbeddingService
+from lovdata_pipeline.domain.services.file_processing_service import FileProcessingService
 from lovdata_pipeline.domain.vector_store import VectorStoreRepository
+from lovdata_pipeline.infrastructure.chroma_vector_store import ChromaVectorStoreRepository
+from lovdata_pipeline.infrastructure.jsonl_vector_store import JsonlVectorStoreRepository
+from lovdata_pipeline.infrastructure.openai_embedding_provider import OpenAIEmbeddingProvider
 from lovdata_pipeline.lovlig import Lovlig
 from lovdata_pipeline.progress import NoOpProgressTracker, ProgressTracker
 from lovdata_pipeline.state import ProcessingState
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class PipelineConfig:
-    """Configuration for pipeline execution."""
-
-    data_dir: Path
-    dataset_filter: str
-    force: bool = False
-
-
-@dataclass
-class PipelineResult:
-    """Result of pipeline execution."""
-
-    processed: int
-    failed: int
-    removed: int
 
 
 class PipelineOrchestrator:
@@ -58,6 +45,73 @@ class PipelineOrchestrator:
         """
         self._file_processor = file_processor
         self._vector_store = vector_store
+
+    @classmethod
+    def create(
+        cls,
+        openai_api_key: str,
+        embedding_model: str,
+        chunk_max_tokens: int,
+        storage_type: str = "chroma",
+        chroma_path: str = "./data/chroma",
+        data_dir: str = "./data",
+        chunk_target_tokens: int = 768,
+        chunk_min_tokens: int = 300,
+        chunk_overlap_ratio: float = 0.15,
+        embedding_dimensions: int | None = 1024,
+    ) -> "PipelineOrchestrator":
+        """Factory method to create a fully configured pipeline orchestrator.
+
+        Args:
+            openai_api_key: OpenAI API key
+            embedding_model: Model to use for embeddings
+            chunk_max_tokens: Maximum tokens per chunk
+            storage_type: Storage type ('chroma' or 'jsonl')
+            chroma_path: Path to ChromaDB storage
+            data_dir: Data directory for JSONL storage
+            chunk_target_tokens: Target tokens per chunk
+            chunk_min_tokens: Minimum tokens per chunk
+            chunk_overlap_ratio: Overlap ratio between chunks
+            embedding_dimensions: Embedding dimensions (1024 for storage efficiency)
+
+        Returns:
+            Configured PipelineOrchestrator instance
+        """
+        # Create OpenAI client and embedding provider
+        openai_client = OpenAI(api_key=openai_api_key)
+        embedding_provider = OpenAIEmbeddingProvider(
+            openai_client, embedding_model, dimensions=embedding_dimensions
+        )
+
+        # Initialize vector store based on storage type
+        if storage_type == "jsonl":
+            jsonl_path = Path(data_dir) / "jsonl_chunks"
+            vector_store: VectorStoreRepository = JsonlVectorStoreRepository(jsonl_path)
+            logger.info(f"Using JSONL storage at: {jsonl_path}")
+        else:  # chroma (default)
+            chroma_client = chromadb.PersistentClient(path=chroma_path)
+            collection = chroma_client.get_or_create_collection(
+                name="legal_docs",
+                metadata={"description": "Norwegian legal documents"},
+            )
+            vector_store = ChromaVectorStoreRepository(collection)
+            logger.info(f"Using ChromaDB storage at: {chroma_path}")
+
+        # Create domain services
+        chunking_service = ChunkingService(
+            target_tokens=chunk_target_tokens,
+            max_tokens=chunk_max_tokens,
+            min_tokens=chunk_min_tokens,
+            overlap_ratio=chunk_overlap_ratio,
+        )
+        embedding_service = EmbeddingService(provider=embedding_provider, batch_size=100)
+        file_processor = FileProcessingService(
+            chunking_service=chunking_service,
+            embedding_service=embedding_service,
+            vector_store=vector_store,
+        )
+
+        return cls(file_processor=file_processor, vector_store=vector_store)
 
     def run(
         self,
@@ -94,7 +148,9 @@ class PipelineOrchestrator:
         self._validate_lovlig_state(lovlig)
 
         # Stage 2: Identify files to process
-        to_process, removed = self._identify_files(lovlig, state, config.force, progress_tracker)
+        to_process, removed = self._identify_files(
+            lovlig, state, config.force, progress_tracker, config.limit
+        )
 
         # Stage 3: Process files
         processed, failed = self._process_files(to_process, state, progress_tracker)
@@ -102,9 +158,12 @@ class PipelineOrchestrator:
         # Stage 4: Clean up removed files
         removed_count = self._cleanup_removed_files(removed, state, progress_tracker)
 
-        # Show summary
-        summary = state.stats()
-        summary["removed"] = removed_count
+        # Show summary (use counts from this run, not cumulative state)
+        summary = {
+            "processed": processed,
+            "failed": failed,
+            "removed": removed_count,
+        }
         progress_tracker.show_summary(summary)
 
         return PipelineResult(
@@ -139,8 +198,8 @@ class PipelineOrchestrator:
         progress_tracker.start_stage("sync", "Syncing datasets")
         stats = lovlig.sync(force=force)
         logger.debug(
-            f"Sync stats - Added: {stats['added']}, "
-            f"Modified: {stats['modified']}, Removed: {stats['removed']}"
+            f"Sync stats - Added: {stats.added}, "
+            f"Modified: {stats.modified}, Removed: {stats.removed}"
         )
         progress_tracker.end_stage("sync")
 
@@ -158,37 +217,65 @@ class PipelineOrchestrator:
         state: ProcessingState,
         force: bool,
         progress_tracker: ProgressTracker,
+        limit: int | None = None,
     ) -> tuple[list[FileInfo], list[dict]]:
-        """Identify files to process and removed files."""
+        """Identify files to process and removed files.
+
+        Critical: This method uses our pipeline_state.json as the source of truth,
+        NOT lovlig's state.json. This prevents data loss if lovlig's state is
+        updated between pipeline runs.
+
+        Strategy:
+        1. Get changed files from lovlig (based on lovlig's state.json)
+        2. Filter using OUR pipeline_state.json to determine what needs processing
+        3. Only skip files that are in OUR state with matching hash
+
+        Args:
+            lovlig: Lovlig client instance
+            state: Processing state tracker (pipeline_state.json)
+            force: Whether to force reprocessing
+            progress_tracker: Progress tracker instance
+            limit: Optional limit on number of files to process
+
+        Returns:
+            Tuple of (files to process, removed files)
+        """
         progress_tracker.start_stage("identify", "Identifying files")
 
         changed = lovlig.get_changed_files()
         removed = lovlig.get_removed_files()
 
-        # Filter already processed (unless force)
         to_process = []
         if force:
-            to_process = [self._convert_to_file_info(f) for f in changed]
+            # When forcing, process ALL files (not just changed)
+            all_files = lovlig.get_all_files()
+            to_process = [
+                FileInfo(doc_id=f.doc_id, path=f.path, dataset=f.dataset, hash=f.hash)
+                for f in all_files
+            ]
+            total_available = len(all_files)
         else:
+            # Use OUR pipeline_state.json to filter - this is the critical fix
+            # Only skip if WE have processed it with the same hash
+            total_available = len(changed)
             for f in changed:
-                if not state.is_processed(f["doc_id"], f["hash"]):
-                    to_process.append(self._convert_to_file_info(f))
+                if not state.is_processed(f.doc_id, f.hash):
+                    to_process.append(
+                        FileInfo(doc_id=f.doc_id, path=f.path, dataset=f.dataset, hash=f.hash)
+                    )
 
-        logger.debug(
-            f"Processing {len(to_process)} files, skipped {len(changed) - len(to_process)}"
-        )
+        # Apply limit if specified
+        if limit is not None and limit > 0:
+            original_count = len(to_process)
+            to_process = to_process[:limit]
+            logger.info(f"Limit applied: processing {len(to_process)} of {original_count} files")
+
+        # Calculate skipped count correctly
+        skipped = total_available - len(to_process)
+        logger.debug(f"Processing {len(to_process)} files, skipped {skipped}")
         progress_tracker.end_stage("identify")
 
         return to_process, removed
-
-    def _convert_to_file_info(self, file_dict: dict) -> FileInfo:
-        """Convert lovlig file dict to FileInfo."""
-        return FileInfo(
-            doc_id=file_dict["doc_id"],
-            path=file_dict["path"],
-            dataset=file_dict["dataset"],
-            hash=file_dict["hash"],
-        )
 
     def _process_files(
         self,
@@ -227,11 +314,7 @@ class PipelineOrchestrator:
 
                 # Update state based on result
                 if result.success:
-                    # Generate vector IDs for state tracking
-                    vector_ids = [
-                        f"{file_info.doc_id}_chunk_{i}" for i in range(result.chunk_count)
-                    ]
-                    state.mark_processed(file_info.doc_id, file_info.hash, vector_ids)
+                    state.mark_processed(file_info.doc_id, file_info.hash)
                     state.save()
                     processed += 1
                     progress_tracker.log_success(file_info.doc_id, result.chunk_count)
@@ -256,7 +339,7 @@ class PipelineOrchestrator:
 
     def _cleanup_removed_files(
         self,
-        removed: list[dict],
+        removed: list,
         state: ProcessingState,
         progress_tracker: ProgressTracker,
     ) -> int:
@@ -268,18 +351,19 @@ class PipelineOrchestrator:
         removed_count = 0
 
         for r in removed:
-            doc_id = r["doc_id"]
-            vectors = state.get_vectors(doc_id)
+            doc_id = r.doc_id
 
-            if vectors:
-                self._vector_store.delete_by_document_id(vectors)
-                logger.debug(f"Deleted {len(vectors)} vectors for {doc_id}")
-                removed_count += 1
-            else:
-                progress_tracker.log_warning(
-                    f"Document {doc_id} removed but not in state. "
-                    "Ghost vectors may remain in vector store."
-                )
+            # Delete all chunks for this document using metadata filter
+            try:
+                deleted = self._vector_store.delete_by_document_id(doc_id)
+                if deleted > 0:
+                    logger.debug(f"Deleted {deleted} chunks for {doc_id}")
+                    removed_count += 1
+                else:
+                    # Document was tracked but had no vectors (maybe never fully processed)
+                    logger.debug(f"No chunks found for {doc_id}")
+            except Exception as e:
+                progress_tracker.log_warning(f"Failed to delete chunks for {doc_id}: {e}")
 
             state.remove(doc_id)
 

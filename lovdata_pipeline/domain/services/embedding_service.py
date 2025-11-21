@@ -69,6 +69,7 @@ class EmbeddingService:
                     absolute_address=chunk.absolute_address,
                     split_reason=chunk.split_reason,
                     parent_chunk_id=chunk.parent_chunk_id,
+                    source_hash=chunk.source_hash,
                     embedding=embedding,
                     embedding_model=model_name,
                     embedded_at=embedded_at,

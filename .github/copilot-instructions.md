@@ -68,45 +68,43 @@ Begin with a concise checklist (3-7 bullets) of what you will do; keep items con
 
 ### For User Questions
 
-| Question                             | Reference File/Section                       |
-| ------------------------------------ | -------------------------------------------- |
-| How do I install/run the pipeline?   | docs/USER_GUIDE.md                           |
-| What commands are available?         | docs/QUICK_REFERENCE.md                      |
-| How do I configure X?                | docs/USER_GUIDE.md (Configuration section)   |
-| Pipeline fails with error Y?         | docs/USER_GUIDE.md (Troubleshooting section) |
-| What data does the pipeline process? | docs/USER_GUIDE.md (Pipeline Steps section)  |
+| Question                             | Reference File/Section                    |
+| ------------------------------------ | ----------------------------------------- |
+| How do I install/run the pipeline?   | docs/GUIDE.md (Installation section)      |
+| What commands are available?         | docs/GUIDE.md (Usage section)             |
+| How do I configure X?                | docs/GUIDE.md (Configuration section)     |
+| Pipeline fails with error Y?         | docs/GUIDE.md (Troubleshooting section)   |
+| What data does the pipeline process? | docs/GUIDE.md (File Structure section)    |
+| Performance tips?                    | docs/GUIDE.md (Performance section)       |
 
 ### For Development Questions
 
-| Question                              | Reference File/Section                                    |
-| ------------------------------------- | --------------------------------------------------------- |
-| What's the architecture?              | docs/DEVELOPER_GUIDE.md (Architecture section)            |
-| How do I add a new pipeline step?     | docs/DEVELOPER_GUIDE.md (Extending the Pipeline section)  |
-| Where is X implemented?               | docs/DEVELOPER_GUIDE.md (Project Structure section)       |
-| How does error handling work?         | docs/DEVELOPER_GUIDE.md (Pipeline Implementation section) |
-| What are the data models?             | docs/DEVELOPER_GUIDE.md (Data Models section)             |
-| How does incremental processing work? | docs/INCREMENTAL_UPDATES.md                               |
-| How do I run tests?                   | docs/DEVELOPER_GUIDE.md (Testing section)                 |
-
-### For Specification Questions
-
-| Question                           | Reference File/Section                                          |
-| ---------------------------------- | --------------------------------------------------------------- |
-| What are the requirements?         | docs/FUNCTIONAL_REQUIREMENTS.md                                 |
-| Does the pipeline handle removals? | docs/FUNCTIONAL_REQUIREMENTS.md (Change Handling section)       |
-| Is it idempotent?                  | docs/FUNCTIONAL_REQUIREMENTS.md (section 2.4)                   |
-| What must I verify before merging? | docs/FUNCTIONAL_REQUIREMENTS.md (Verification Checklist at end) |
+| Question                              | Reference File/Section                                   |
+| ------------------------------------- | -------------------------------------------------------- |
+| What's the architecture?              | docs/DEVELOPMENT.md (Architecture section)               |
+| How do I add a new feature?           | docs/DEVELOPMENT.md (Extending the Pipeline section)     |
+| Where is X implemented?               | docs/DEVELOPMENT.md (Project Structure section)          |
+| What are the data models?             | docs/DEVELOPMENT.md (Data Models section)                |
+| How does incremental processing work? | docs/GUIDE.md (Processing Behavior section)              |
+| How do I run tests?                   | docs/DEVELOPMENT.md (Testing section)                    |
+| What must I verify before merging?    | docs/DEVELOPMENT.md (Requirements Checklist section)     |
 
 ### Quick Documentation Summary
 
 - **README.md** – Project overview and quick start (start here)
-- **docs/USER_GUIDE.md** – Complete user manual (installation, configuration, usage, troubleshooting)
-- **docs/DEVELOPER_GUIDE.md** – Developer reference (architecture, extending, testing)
-- **docs/FUNCTIONAL_REQUIREMENTS.md** – Specification (requirements all changes must satisfy)
-- **docs/QUICK_REFERENCE.md** – Command cheat sheet
-- **docs/INCREMENTAL_UPDATES.md** – Change detection details
-- **docs/archive/** – Historical implementation docs (archived, not actively maintained)
+- **docs/GUIDE.md** – Complete user manual (installation, configuration, usage, troubleshooting)
+- **docs/DEVELOPMENT.md** – Developer reference (architecture, extending, testing, contributing)
+- **docs/archive/** – Historical documentation (archived, not actively maintained)
+
+- **README.md** – Project overview and quick start (start here)
+- **README.md** – Project overview and quick start (start here)
+- **docs/GUIDE.md** – Complete user manual (installation, configuration, usage, troubleshooting)
+- **docs/DEVELOPMENT.md** – Developer reference (architecture, extending, testing, contributing)
+- **docs/archive/** – Historical documentation (archived, not actively maintained)
 
 ### Updating Documentation
 
 - After implementing or changing something, always update the documentation accordingly.
+- User-facing changes → update docs/GUIDE.md
+- Developer-facing changes → update docs/DEVELOPMENT.md
+- Keep docs concise and functional - no verbose explanations

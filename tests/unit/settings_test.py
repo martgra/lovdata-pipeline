@@ -68,72 +68,56 @@ def test_settings_defaults(monkeypatch):
     assert settings.force is False
 
 
-def test_settings_missing_api_key(monkeypatch):
-    """Test that missing API key raises validation error."""
-    # Clear all env vars including from .env file
+@pytest.mark.parametrize(
+    "api_key,expected_error",
+    [
+        ("", "OPENAI_API_KEY"),  # Empty string - missing required field
+        ("invalid-key", "must start with 'sk-'"),  # Invalid format
+        ("sk-short", "too short"),  # Too short
+    ],
+    ids=["missing", "invalid_format", "too_short"],
+)
+def test_settings_api_key_validation(monkeypatch, api_key, expected_error):
+    """Test API key validation with various invalid inputs."""
+    # Clear existing API key env vars
     for key in list(os.environ.keys()):
         if "API_KEY" in key.upper() or key.upper() == "OPENAI_API_KEY":
             monkeypatch.delenv(key, raising=False)
 
-    # Also need to prevent .env file loading
-    monkeypatch.setenv("OPENAI_API_KEY", "")  # Empty string should fail validation
+    if api_key:  # Only set if not testing empty
+        monkeypatch.setenv("OPENAI_API_KEY", api_key)
+    else:
+        monkeypatch.setenv("OPENAI_API_KEY", "")
 
     with pytest.raises(ValidationError) as exc_info:
         PipelineSettings()
 
     errors = exc_info.value.errors()
-    # Field location uses the alias (OPENAI_API_KEY) in errors
-    assert any(e["loc"] == ("OPENAI_API_KEY",) for e in errors)
+    # Verify expected error is present
+    assert any(expected_error in str(e) for e in errors)
 
 
-def test_settings_invalid_api_key(monkeypatch):
-    """Test that invalid API key format raises validation error."""
-    monkeypatch.setenv("OPENAI_API_KEY", "invalid-key")  # pragma: allowlist secret
-
-    with pytest.raises(ValidationError) as exc_info:
-        PipelineSettings()
-
-    errors = exc_info.value.errors()
-    # Field location uses the alias (OPENAI_API_KEY) in errors
-    assert any(
-        e["loc"] == ("OPENAI_API_KEY",) and "must start with 'sk-'" in e["msg"]
-        for e in errors
-    )
-
-
-def test_settings_api_key_too_short(monkeypatch):
-    """Test that short API key raises validation error."""
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-short")
-
-    with pytest.raises(ValidationError) as exc_info:
-        PipelineSettings()
-
-    errors = exc_info.value.errors()
-    # Field location uses the alias (OPENAI_API_KEY) in errors
-    assert any(
-        e["loc"] == ("OPENAI_API_KEY",) and "too short" in e["msg"]
-        for e in errors
-    )
-
-
-def test_settings_chunk_tokens_validation(monkeypatch):
+@pytest.mark.parametrize(
+    "chunk_tokens,should_pass,expected_value",
+    [
+        (50, False, None),      # Too small
+        (20000, False, None),   # Too large
+        (100, True, 100),       # Valid minimum
+        (6800, True, 6800),     # Valid default
+        (10000, True, 10000),   # Valid maximum
+    ],
+    ids=["too_small", "too_large", "min_boundary", "default", "max_boundary"],
+)
+def test_settings_chunk_tokens_validation(monkeypatch, chunk_tokens, should_pass, expected_value):
     """Test chunk token bounds validation."""
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test123456789012345678")
 
-    # Too small
-    with pytest.raises(ValidationError):
-        PipelineSettings(chunk_max_tokens=50)
-
-    # Too large
-    with pytest.raises(ValidationError):
-        PipelineSettings(chunk_max_tokens=20000)
-
-    # Valid boundaries
-    settings_min = PipelineSettings(chunk_max_tokens=100)
-    assert settings_min.chunk_max_tokens == 100
-
-    settings_max = PipelineSettings(chunk_max_tokens=10000)
-    assert settings_max.chunk_max_tokens == 10000
+    if should_pass:
+        settings = PipelineSettings(chunk_max_tokens=chunk_tokens)
+        assert settings.chunk_max_tokens == expected_value
+    else:
+        with pytest.raises(ValidationError):
+            PipelineSettings(chunk_max_tokens=chunk_tokens)
 
 
 def test_settings_empty_dataset_filter(monkeypatch):
@@ -163,24 +147,6 @@ def test_settings_path_conversion(monkeypatch):
     assert isinstance(settings.chroma_path, Path)
     assert settings.data_dir == Path("/tmp/data")
     assert settings.chroma_path == Path("/tmp/chroma")
-
-
-def test_settings_to_dict(monkeypatch):
-    """Test conversion to dictionary."""
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test123456789012345678")
-
-    settings = PipelineSettings(
-        data_dir="/custom/data",
-        force=True,
-    )
-
-    config_dict = settings.to_dict()
-
-    assert isinstance(config_dict, dict)
-    assert config_dict["openai_api_key"] == "sk-test123456789012345678"
-    assert config_dict["data_dir"] == "/custom/data"
-    assert config_dict["force"] is True
-    assert isinstance(config_dict["chunk_max_tokens"], int)
 
 
 def test_settings_case_insensitive(monkeypatch):

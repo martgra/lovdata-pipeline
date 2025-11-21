@@ -26,11 +26,14 @@ class VectorStoreRepository(Protocol):
         """
         ...
 
-    def delete_by_document_id(self, vector_ids: list[str]) -> None:
-        """Delete vectors by their IDs.
+    def delete_by_document_id(self, doc_id: str) -> int:
+        """Delete all vectors for a document by metadata filter.
 
         Args:
-            vector_ids: List of vector IDs to delete
+            doc_id: Document ID to delete all chunks for
+
+        Returns:
+            Number of vectors deleted
 
         Raises:
             Exception: If deletion fails
