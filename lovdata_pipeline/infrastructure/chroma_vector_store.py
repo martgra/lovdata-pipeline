@@ -75,3 +75,19 @@ class ChromaVectorStoreRepository:
             Exception: If ChromaDB count operation fails
         """
         return self._collection.count()
+
+    def get_all_document_ids(self) -> set[str]:
+        """Get all unique document IDs in the store.
+
+        Returns:
+            Set of document IDs that have chunks stored
+
+        Raises:
+            Exception: If ChromaDB operations fail
+        """
+        # Get all chunks with only metadata
+        result = self._collection.get(
+            include=["metadatas"],
+        )
+        doc_ids = {meta["document_id"] for meta in result["metadatas"] if "document_id" in meta}
+        return doc_ids

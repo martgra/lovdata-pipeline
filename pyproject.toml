@@ -3,11 +3,11 @@ name = "lovdata-pipeline"
 version = "0.1.0"
 description = "Pipeline for processing Norwegian legal documents from Lovdata into searchable vector embeddings"
 authors = [{ name = "Martin Gran", email = "martgra@gmail.com" }]
-requires-python = ">=3.11"
+requires-python = ">=3.13"
 readme = "README.md"
 dependencies = [
     "chromadb>=1.3.5",
-    "lovdata-processing",
+    "lovlig",
     "lxml>=6.0.2",
     "openai>=2.8.1",
     "pydantic>=2.12.4",
@@ -37,11 +37,11 @@ default-groups = [
     "test",
 ]
 
+[tool.uv.sources]
+lovlig = { git = "https://github.com/martgra/lovlig.git" }
+
 [project.scripts]
 lg = "lovdata_pipeline.cli:main"
-
-[tool.uv.sources]
-lovdata-processing = { git = "https://github.com/martgra/lovlig.git" }
 
 [tool.hatch.build.targets.sdist]
 include = ["lovdata_pipeline"]

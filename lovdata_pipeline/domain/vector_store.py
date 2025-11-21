@@ -50,3 +50,14 @@ class VectorStoreRepository(Protocol):
             Exception: If count operation fails
         """
         ...
+
+    def get_all_document_ids(self) -> set[str]:
+        """Get all unique document IDs in the store.
+
+        Returns:
+            Set of document IDs that have chunks stored
+
+        Raises:
+            Exception: If retrieval operation fails
+        """
+        ...

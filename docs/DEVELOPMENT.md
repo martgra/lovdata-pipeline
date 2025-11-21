@@ -1,6 +1,6 @@
 # Development Guide
 
-Guide for understanding, extending, and contributing to the Lovdata pipeline.
+Guide for understanding, extending, and contributing to the Lovdata Pipeline.
 
 ## Architecture
 
@@ -221,10 +221,34 @@ class CustomEmbeddingProvider(EmbeddingProvider):
 Wire it up in `pipeline.py`:
 
 ```python
-def create_pipeline_orchestrator(...):
-    embedding_provider = CustomEmbeddingProvider(...)
+from lovdata_pipeline.domain.services.embedding_service import EmbeddingService
+from custom_embedding_provider import CustomEmbeddingProvider
+
+def create_pipeline_orchestrator(
+    storage_type: str,
+    data_dir: Path,
+    # ... other parameters
+):
+    # Create custom embedding provider
+    embedding_provider = CustomEmbeddingProvider(
+        api_key="your-api-key",
+        model_name="your-model-name"
+    )
+
+    # Create embedding service with custom provider
     embedding_service = EmbeddingService(provider=embedding_provider)
-    ...
+
+    # Pass to other services and orchestrator
+    processing_service = FileProcessingService(
+        chunking_service=chunking_service,
+        embedding_service=embedding_service,
+        vector_store=vector_store
+    )
+
+    return PipelineOrchestrator(
+        processing_service=processing_service,
+        # ... other dependencies
+    )
 ```
 
 ### Add Custom Vector Store
@@ -424,7 +448,9 @@ Automatically run on commit:
 - Trailing whitespace removal
 - YAML validation
 
-Managed by `prek` (not `pre-commit`):
+> **Note:** This project uses `prek`, a fast Rust-based pre-commit hook manager, instead of the standard Python `pre-commit` tool.
+
+Managed by `prek`:
 
 ```bash
 # Install hooks
@@ -465,61 +491,6 @@ uv run prek run --all-files
    ```bash
    git push origin feature/your-feature
    ```
-
-## Requirements Checklist
-
-Before merging changes, verify these functional requirements:
-
-### Change Detection
-
-- [ ] Pipeline only processes added/modified files
-- [ ] Uses file hash comparison (lovlig vs pipeline state)
-- [ ] Detects renamed files as removed + added
-- [ ] Handles missing state files gracefully
-
-### Change Handling
-
-- [ ] Removed files: chunks deleted from vector store
-- [ ] Modified files: old chunks deleted, new chunks added
-- [ ] Added files: chunks created and stored
-- [ ] Atomic per-file processing (all or nothing)
-
-### Processing
-
-- [ ] Each file processed independently
-- [ ] Failures don't block other files
-- [ ] Failed files tracked in state
-- [ ] Progress reporting shows current file
-
-### State Management
-
-- [ ] `pipeline_state.json` tracks processed/failed files
-- [ ] State updated after each file completes
-- [ ] State includes file hash for change detection
-- [ ] State recoverable if corrupted
-
-### Index Consistency
-
-- [ ] No orphaned chunks (file deleted but chunks remain)
-- [ ] No duplicate chunks (same chunk stored twice)
-- [ ] Chunks deleted when source file removed/modified
-- [ ] Chunk IDs unique across all documents
-- [ ] Metadata format compatible with storage backend (e.g., ChromaDB requires primitives)
-- [ ] Migration between storage backends preserves all data correctly
-
-### Error Handling
-
-- [ ] Network errors: retry with exponential backoff
-- [ ] Rate limits: respect API limits, queue requests
-- [ ] File errors: log and continue with other files
-- [ ] State corruption: detect and recover/rebuild
-
-### Observability
-
-- [ ] Progress: current file, completion percentage
-- [ ] Statistics: processed, failed, removed counts
-- [ ] Errors: clear error messages with context
-- [ ] State: can inspect processing status
 
 ## Common Tasks
 
@@ -597,30 +568,24 @@ uv run lg process --storage jsonl --limit 5
 
 ## Contributing
 
-### Guidelines
+For detailed contribution guidelines, see [CONTRIBUTING.md](../CONTRIBUTING.md).
 
-- **Keep it simple**: This is a straightforward ETL pipeline
-- **Test your changes**: Add unit tests for new functionality
-- **Follow conventions**: Use Ruff formatting, type hints
-- **Update docs**: Document new features in GUIDE.md
-- **Atomic commits**: One logical change per commit
+### Quick Reference
 
-### Pull Request Process
+- **Setup:** `make install && uv run prek install`
+- **Test:** `make test`
+- **Format:** `make format`
+- **Lint:** `make lint`
 
-1. Fork the repository
-2. Create feature branch
-3. Make changes with tests
-4. Run full test suite and linting
-5. Update documentation if needed
-6. Submit PR with clear description
-
-### Code Style
+### Code Style Summary
 
 - Use Ruff for formatting (automatic via pre-commit)
 - Add type hints to all functions
 - Write docstrings for public APIs
 - Keep functions small and focused
 - Prefer composition over inheritance
+
+See [CONTRIBUTING.md](../CONTRIBUTING.md) for complete guidelines, PR process, and requirements checklist.
 
 ## Resources
 

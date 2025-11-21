@@ -6,8 +6,8 @@ Just the essentials: sync datasets and query file changes.
 import json
 from pathlib import Path
 
-from lovdata_processing import Settings as LovligSettings
-from lovdata_processing import sync_datasets
+from lovlig import Settings as LovligSettings
+from lovlig import sync_datasets
 
 from lovdata_pipeline.domain.models import (
     LovligFileInfo,
