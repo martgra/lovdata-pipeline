@@ -179,6 +179,21 @@ class JsonlVectorStoreRepository:
         """
         return [f.stem for f in self._storage_dir.glob("*.jsonl")]
 
+    def get_all_document_ids(self) -> set[str]:
+        """Get all unique document IDs in the store.
+
+        Returns:
+            Set of document IDs that have chunks stored
+
+        Raises:
+            OSError: If file read operations fail
+        """
+        doc_ids = set()
+        for jsonl_file in self._storage_dir.glob("*.jsonl"):
+            chunks = self._load_chunks_from_file(jsonl_file)
+            doc_ids.update(c.document_id for c in chunks)
+        return doc_ids
+
     def _load_chunks_from_file(self, file_path: Path) -> list[EnrichedChunk]:
         """Load chunks from a JSONL file.
 

@@ -2,6 +2,46 @@
 
 Complete guide for installing, configuring, and using the Lovdata legal document processing pipeline.
 
+## Table of Contents
+
+- [Quick Start](#quick-start)
+- [Installation](#installation)
+  - [Prerequisites](#prerequisites)
+  - [Install Pipeline](#install-pipeline)
+  - [Install lovlig (Data Source)](#install-lovlig-data-source)
+- [Configuration](#configuration)
+  - [Environment Variables](#environment-variables)
+  - [Storage Options](#storage-options)
+- [Usage](#usage)
+  - [Basic Commands](#basic-commands)
+  - [CLI Reference](#cli-reference)
+  - [Processing Behavior](#processing-behavior)
+- [File Structure](#file-structure)
+  - [Data Files](#data-files)
+- [Monitoring](#monitoring)
+  - [Processing Output](#processing-output)
+  - [State Files](#state-files)
+- [Migration Between Storage Types](#migration-between-storage-types)
+- [Advanced Usage](#advanced-usage)
+  - [Custom Chunk Size](#custom-chunk-size)
+  - [Filter by Dataset](#filter-by-dataset)
+  - [Batch Processing](#batch-processing)
+  - [State Management](#state-management)
+- [Troubleshooting](#troubleshooting)
+  - [Processing Failures](#processing-failures)
+  - [API Rate Limits](#api-rate-limits)
+  - [Missing Dependencies](#missing-dependencies)
+  - [Data Issues](#data-issues)
+- [Performance](#performance)
+  - [Costs](#costs)
+  - [Processing Speed](#processing-speed)
+  - [Optimization Tips](#optimization-tips)
+- [Testing](#testing)
+- [Common Tasks](#common-tasks)
+- [Support](#support)
+
+---
+
 ## Quick Start
 
 ```bash
@@ -15,6 +55,8 @@ export OPENAI_API_KEY="sk-..."
 uv run lg process --storage jsonl --limit 10
 ```
 
+> **Tip:** Use `--limit 10` when testing to process only a small batch of files and verify your setup works correctly.
+
 ## Installation
 
 ### Prerequisites
@@ -22,6 +64,8 @@ uv run lg process --storage jsonl --limit 10
 - **Python 3.11+**
 - **OpenAI API key** (for embeddings)
 - **uv** package manager (auto-installed by `make install`)
+
+> **Note:** ChromaDB Python client is automatically installed as a dependency. No separate server installation is required for local usage.
 
 ### Install Pipeline
 
@@ -57,6 +101,8 @@ cargo build --release
 
 ### Environment Variables
 
+> **Important:** You must set `OPENAI_API_KEY` to use the pipeline. Get your API key from [platform.openai.com](https://platform.openai.com).
+
 Create `.env` file:
 
 ```bash
@@ -79,12 +125,14 @@ TARGET_TOKENS=768                        # Chunk size
 - Simple file-based storage - one `.jsonl` file per document
 - Easy to backup, version control, and inspect
 - No external dependencies
+- Portable and human-readable
 
-**ChromaDB (For production deployments):**
+**ChromaDB (For advanced users):**
 
-- Full-featured vector database with built-in search
+- Full-featured vector database with built-in search capabilities
 - Better for large-scale operations (10K+ documents)
-- Requires ChromaDB server
+- Embedded mode (default) - no separate server needed
+- Optional: Can connect to remote ChromaDB server for production deployments
 
 ```bash
 # Use JSONL (default)
@@ -118,6 +166,8 @@ uv run lg search "arbeidsrett" --limit 5
 uv run lg migrate --source chroma --target jsonl
 ```
 
+> **Warning:** The `--force` flag will reprocess all files, potentially incurring API costs. Use `--limit` to test with a small batch first.
+
 ### CLI Reference
 
 **`lg process`** - Run the processing pipeline
@@ -150,6 +200,8 @@ uv run lg migrate --source chroma --target jsonl
 ```
 
 ### Processing Behavior
+
+> **Note:** Understanding the pipeline's behavior helps you manage data efficiently and avoid unexpected costs.
 
 The pipeline is **incremental** and **atomic**:
 
@@ -403,7 +455,9 @@ cargo build --release
 
 **Problem:** Stale chunks or incorrect state
 
-**Solution:** Clear state and reprocess:
+**Solution:**
+
+> **Warning:** This will delete all processing state and chunks. You'll need to reprocess everything, which will incur API costs.
 
 ```bash
 # Remove state files

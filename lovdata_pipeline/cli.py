@@ -15,7 +15,10 @@ from rich.logging import RichHandler
 from lovdata_pipeline.config.settings import PipelineSettings
 from lovdata_pipeline.progress import RichProgressTracker
 
-app = typer.Typer(help="Lovdata Pipeline - Process Norwegian legal documents")
+app = typer.Typer(
+    help="Lovdata Pipeline - Process Norwegian legal documents",
+    no_args_is_help=True,
+)
 console = Console()
 
 # Configure logging with DEBUG level (progress bars will show main output)
@@ -341,6 +344,146 @@ def status(data_dir: str = typer.Option("./data", help="Data directory")):
 
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from e
+
+
+@app.command()
+def validate(
+    data_dir: str = typer.Option("./data", help="Data directory"),
+    storage: str = typer.Option(
+        "jsonl",
+        "--storage",
+        "-s",
+        help="Storage type to validate: 'chroma' or 'jsonl'",
+    ),
+    chroma_path: str = typer.Option(None, help="ChromaDB path (if different from default)"),
+    jsonl_path: str = typer.Option(None, help="JSONL storage path (if different from default)"),
+):
+    """Validate state consistency against vector store.
+
+    Checks that:
+    - All documents in state have chunks in the vector store
+    - All documents in the vector store are tracked in state
+    - Reports any inconsistencies
+
+    Examples:
+        # Validate JSONL storage (default)
+        lovdata-pipeline validate
+
+        # Validate ChromaDB storage
+        lovdata-pipeline validate --storage chroma
+
+        # Validate with custom paths
+        lovdata-pipeline validate -s jsonl --jsonl-path ./custom/path
+    """
+    try:
+        import chromadb
+
+        from lovdata_pipeline.domain.services.validation_service import ValidationService
+        from lovdata_pipeline.infrastructure.chroma_vector_store import ChromaVectorStoreRepository
+        from lovdata_pipeline.infrastructure.jsonl_vector_store import JsonlVectorStoreRepository
+        from lovdata_pipeline.state import ProcessingState
+
+        # Validate storage type
+        if storage not in ["chroma", "jsonl"]:
+            console.print(f"[red]Invalid storage type: {storage}[/red]")
+            console.print("Must be 'chroma' or 'jsonl'")
+            raise typer.Exit(1)
+
+        # Load state
+        state_file = Path(data_dir) / "pipeline_state.json"
+        if not state_file.exists():
+            console.print("[red]No pipeline_state.json found[/red]")
+            console.print(f"Expected: {state_file}")
+            raise typer.Exit(1)
+
+        state = ProcessingState(state_file)
+
+        console.print("[bold blue]═══ State Validation ═══[/bold blue]")
+        console.print(f"Storage: {storage}")
+        console.print(f"State file: {state_file}")
+        console.print()
+
+        # Initialize vector store and get document IDs
+        if storage == "jsonl":
+            jsonl_storage_path = jsonl_path or Path(data_dir) / "jsonl_chunks"
+            if not Path(jsonl_storage_path).exists():
+                console.print(f"[red]JSONL storage not found: {jsonl_storage_path}[/red]")
+                raise typer.Exit(1)
+
+            console.print(f"JSONL path: {jsonl_storage_path}")
+            vector_store = JsonlVectorStoreRepository(Path(jsonl_storage_path))
+
+        else:  # chroma
+            chroma_storage_path = chroma_path or Path(data_dir) / "chroma"
+            if not Path(chroma_storage_path).exists():
+                console.print(f"[red]ChromaDB storage not found: {chroma_storage_path}[/red]")
+                raise typer.Exit(1)
+
+            console.print(f"ChromaDB path: {chroma_storage_path}")
+            client = chromadb.PersistentClient(path=str(chroma_storage_path))
+            try:
+                collection = client.get_collection(name="legal_docs")
+            except Exception as err:
+                console.print("[red]ChromaDB collection 'legal_docs' not found[/red]")
+                raise typer.Exit(1) from err
+
+            vector_store = ChromaVectorStoreRepository(collection)
+
+        # Perform validation using service
+        validation_service = ValidationService(state, vector_store)
+        result = validation_service.validate()
+
+        # Display results
+        console.print(f"Documents in state: {result.state_doc_count}")
+        console.print(f"Documents in store: {result.store_doc_count}")
+        console.print()
+
+        if result.is_consistent:
+            console.print("[green]✓ State and store are consistent![/green]")
+            console.print(f"All {result.state_doc_count} documents are properly tracked.")
+        else:
+            console.print("[yellow]⚠ Inconsistencies found:[/yellow]")
+            console.print()
+
+            if result.in_state_not_store:
+                console.print(
+                    f"[red]✗ {len(result.in_state_not_store)} documents in state"
+                    " but NOT in store:[/red]"
+                )
+                console.print("  (These documents are tracked as processed but have no chunks)")
+                for doc_id in sorted(list(result.in_state_not_store)[:10]):
+                    console.print(f"    - {doc_id}")
+                if len(result.in_state_not_store) > 10:
+                    console.print(f"    ... and {len(result.in_state_not_store) - 10} more")
+                console.print()
+
+            if result.in_store_not_state:
+                console.print(
+                    f"[red]✗ {len(result.in_store_not_state)}"
+                    " documents in store but NOT in state:[/red]"
+                )
+                console.print("  (These documents have chunks but are not tracked as processed)")
+                for doc_id in sorted(list(result.in_store_not_state)[:10]):
+                    console.print(f"    - {doc_id}")
+                if len(result.in_store_not_state) > 10:
+                    console.print(f"    ... and {len(result.in_store_not_state) - 10} more")
+                console.print()
+
+            console.print("[yellow]Recommendations:[/yellow]")
+            if result.in_state_not_store:
+                console.print("  • Documents in state without chunks may indicate failed uploads")
+                console.print("  • Run with --force to reprocess these documents")
+            if result.in_store_not_state:
+                console.print("  • Documents in store without state tracking are orphaned")
+                console.print("  • These may be from interrupted or failed pipeline runs")
+
+            raise typer.Exit(1)
+
+    except Exception as e:
+        if isinstance(e, typer.Exit):
+            raise
+        console.print(f"[red]Validation failed: {e}[/red]")
         raise typer.Exit(1) from e
 
 
